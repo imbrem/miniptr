@@ -1,0 +1,22 @@
+[package]
+name = "miniptr"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bytemuck = { version = "1.13.1", features = ["derive"] }
+either = "1.8.1"
+
+[dev-dependencies]
+criterion = "0.4"
+rand = "0.8.5"
+rand_xoshiro = "0.6.0"
+
+[[bench]]
+name = "slab"
+harness = false
+
+[profile.bench]
+debug = true
