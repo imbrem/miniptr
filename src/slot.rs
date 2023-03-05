@@ -48,7 +48,10 @@ pub trait Slot<K>: Sized + InitFrom<Self::Value> {
     /// Set this slot to either a value or a key
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn set_slot(&mut self, new: Either<K, Self::Value>) {
-        *self = Self::from_either(new);
+        match new {
+            either::Either::Left(new) => self.set_key(new),
+            either::Either::Right(new) => self.set_value(new),
+        }
     }
 
     /// Set this slot to a key
@@ -60,11 +63,12 @@ pub trait Slot<K>: Sized + InitFrom<Self::Value> {
     /// Take this slot's value, replacing it with another
     ///
     /// Panic or return an arbitrary value if this slot does not contain a value
-    #[cfg_attr(not(tarpaulin), inline(always))]
+    #[inline]
     fn swap(&mut self, new: Either<K, Self::Value>) -> Self::Value {
-        let mut result = Self::from_either(new);
-        std::mem::swap(&mut result, self);
-        result.into_value()
+        match new {
+            either::Either::Left(new) => self.swap_key(new),
+            either::Either::Right(new) => self.swap_value(new),
+        }
     }
 
     /// Take this slot's value, replacing it with a key
