@@ -1,5 +1,5 @@
 /*!
-A trait for arena-like allocators
+A trait for simple allocators
 */
 
 use std::marker::PhantomData;

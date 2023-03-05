@@ -15,10 +15,8 @@ pub trait InitFrom<V> {
     fn set_value(&mut self, new: V);
 }
 
-/// A type which can contain either
-/// - A value of type `Self::Value`
-/// - A key of type `K`
-pub trait Slot<K>: Sized + InitFrom<Self::Value> {
+/// A type which can contain a single value of type `Self::Value`
+pub trait Slot: Sized + InitFrom<Self::Value> {
     /// The type of values which may be stored in this slot
     type Value;
 
@@ -39,6 +37,57 @@ pub trait Slot<K>: Sized + InitFrom<Self::Value> {
         self.try_into_value().expect("slot does not contain value")
     }
 
+    /// Take this slot's value, replacing it with a new one
+    ///
+    /// Return an arbitrary value if this slot does not contain a value
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_swap_value(&mut self, new: Self::Value) -> Option<Self::Value> {
+        let mut result = Self::from_value(new);
+        std::mem::swap(&mut result, self);
+        result.try_into_value()
+    }
+
+    /// Take this slot's value, replacing it with a new one
+    ///
+    /// Panic or return an arbitrary value if this slot does not contain a value
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn swap_value(&mut self, new: Self::Value) -> Self::Value {
+        self.try_swap_value(new)
+            .expect("slot does not contain value")
+    }
+}
+
+/// A type which can contain a single value of type `Self::Value`, which can be extracted
+pub trait RemoveSlot: Slot {
+    /// Take this slot's value, replacing it with a new one
+    ///
+    /// Return an arbitrary value if this slot does not contain a value
+    #[must_use]
+    fn try_remove_value(&mut self) -> Option<Self::Value>;
+
+    /// Take this slot's value, replacing it with a new one
+    ///
+    /// Panic or return an arbitrary value if this slot does not contain a value
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    #[must_use]
+    fn remove_value(&mut self) -> Self::Value {
+        self.try_remove_value()
+            .expect("slot does not contain value")
+    }
+
+    /// Delete this slot's value
+    ///
+    /// Panic or return an arbitrary value if this slot does not contain a value
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn delete_value(&mut self) {
+        let _ = self.remove_value();
+    }
+}
+
+/// A type which can contain either
+/// - A value of type `Self::Value`
+/// - A key of type `K`
+pub trait KeySlot<K>: Slot {
     /// If this slot contains a key, return it
     ///
     /// A slot is guaranteed to contain a key if created using `Self::from_key`
@@ -98,16 +147,6 @@ pub trait Slot<K>: Sized + InitFrom<Self::Value> {
         result.try_into_value()
     }
 
-    /// Take this slot's value, replacing it with a new one
-    ///
-    /// Return an arbitrary value if this slot does not contain a value
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_swap_value(&mut self, new: Self::Value) -> Option<Self::Value> {
-        let mut result = Self::from_value(new);
-        std::mem::swap(&mut result, self);
-        result.try_into_value()
-    }
-
     /// Take this slot's value, replacing it with another
     ///
     /// Panic or return an arbitrary value if this slot does not contain a value
@@ -123,19 +162,10 @@ pub trait Slot<K>: Sized + InitFrom<Self::Value> {
     fn swap_key(&mut self, new: K) -> Self::Value {
         self.try_swap_key(new).expect("slot does not contain value")
     }
-
-    /// Take this slot's value, replacing it with a new one
-    ///
-    /// Panic or return an arbitrary value if this slot does not contain a value
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    fn swap_value(&mut self, new: Self::Value) -> Self::Value {
-        self.try_swap_value(new)
-            .expect("slot does not contain value")
-    }
 }
 
 /// A slot which can be dereferenced
-pub trait SlotRef<K>: Slot<K> {
+pub trait SlotRef: Slot {
     /// If this slot contains a value, return a reference to it
     ///
     /// A slot is guaranteed to contain a value if created using `Self::from_value`
@@ -155,7 +185,7 @@ pub trait SlotRef<K>: Slot<K> {
 }
 
 /// A slot which can be mutably dereferenced
-pub trait SlotMut<K>: Slot<K> {
+pub trait SlotMut: Slot {
     /// If this slot contains a value, return a mutable reference to it
     ///
     /// A slot is guaranteed to contain a value if created using `Self::from_value`
@@ -174,14 +204,16 @@ pub trait SlotMut<K>: Slot<K> {
 }
 
 /// The identity slot: contains a key, which can be interpreted as either a key or a value
+///
+/// Values are removed by cloning the current value
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, TransparentWrapper)]
 #[repr(transparent)]
-pub struct IdSlot<K>(K);
+pub struct CloneSlot<K>(pub K);
 
-impl<K> InitFrom<K> for IdSlot<K> {
+impl<K> InitFrom<K> for CloneSlot<K> {
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn from_value(value: K) -> Self {
-        IdSlot(value)
+        CloneSlot(value)
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
@@ -190,10 +222,7 @@ impl<K> InitFrom<K> for IdSlot<K> {
     }
 }
 
-impl<K> Slot<K> for IdSlot<K>
-where
-    K: Clone,
-{
+impl<K> Slot for CloneSlot<K> {
     type Value = K;
 
     #[cfg_attr(not(tarpaulin), inline(always))]
@@ -205,7 +234,30 @@ where
     fn into_value(self) -> Self::Value {
         self.0
     }
+}
 
+impl<K> RemoveSlot for CloneSlot<K>
+where
+    K: Clone,
+{
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_remove_value(&mut self) -> Option<Self::Value> {
+        Some(self.0.clone())
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn remove_value(&mut self) -> Self::Value {
+        self.0.clone()
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn delete_value(&mut self) {}
+}
+
+impl<K> KeySlot<K> for CloneSlot<K>
+where
+    K: Clone,
+{
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn try_key(&self) -> Option<K> {
         Some(self.0.clone())
@@ -218,14 +270,11 @@ where
 
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn from_key(key: K) -> Self {
-        IdSlot(key)
+        CloneSlot(key)
     }
 }
 
-impl<K> SlotRef<K> for IdSlot<K>
-where
-    K: Clone,
-{
+impl<K> SlotRef for CloneSlot<K> {
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn try_value(&self) -> Option<&Self::Value> {
         Some(&self.0)
@@ -237,10 +286,99 @@ where
     }
 }
 
-impl<K> SlotMut<K> for IdSlot<K>
+impl<K> SlotMut for CloneSlot<K> {
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_value_mut(&mut self) -> Option<&mut Self::Value> {
+        Some(&mut self.0)
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn value_mut(&mut self) -> &mut Self::Value {
+        &mut self.0
+    }
+}
+
+/// The identity slot: contains a key, which can be interpreted as either a key or a value
+///
+/// Values are removed by replacing them with the default value
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, TransparentWrapper)]
+#[repr(transparent)]
+pub struct DefaultSlot<K>(pub K);
+
+impl<K> InitFrom<K> for DefaultSlot<K> {
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn from_value(value: K) -> Self {
+        DefaultSlot(value)
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn set_value(&mut self, new: K) {
+        self.0 = new
+    }
+}
+
+impl<K> Slot for DefaultSlot<K> {
+    type Value = K;
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_into_value(self) -> Option<Self::Value> {
+        Some(self.0)
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn into_value(self) -> Self::Value {
+        self.0
+    }
+}
+
+impl<K> RemoveSlot for DefaultSlot<K>
+where
+    K: Default,
+{
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_remove_value(&mut self) -> Option<Self::Value> {
+        Some(self.swap_value(K::default()))
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn remove_value(&mut self) -> Self::Value {
+        self.swap_value(K::default())
+    }
+}
+
+impl<K> KeySlot<K> for DefaultSlot<K>
 where
     K: Clone,
 {
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_key(&self) -> Option<K> {
+        Some(self.0.clone())
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn key(&self) -> K {
+        self.0.clone()
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn from_key(key: K) -> Self {
+        DefaultSlot(key)
+    }
+}
+
+impl<K> SlotRef for DefaultSlot<K> {
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_value(&self) -> Option<&Self::Value> {
+        Some(&self.0)
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn value(&self) -> &Self::Value {
+        &self.0
+    }
+}
+
+impl<K> SlotMut for DefaultSlot<K> {
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn try_value_mut(&mut self) -> Option<&mut Self::Value> {
         Some(&mut self.0)
@@ -255,7 +393,7 @@ where
 /// A slot which can be queried to see whether it contains a key or a value
 ///
 /// Note a `CheckedSlot` is always guaranteed to contain at least one of a key or value (unlike a [`Slot`]!)
-pub trait CheckedSlot<K>: Slot<K> {
+pub trait CheckedSlot<K>: KeySlot<K> {
     /// Whether this slot contains a value
     fn has_value(&self) -> bool;
 
@@ -278,7 +416,7 @@ pub trait CheckedSlot<K>: Slot<K> {
     /// If this slot can be interpreted as both a key and value, prefer the key
     fn as_either(&self) -> Either<K, &Self::Value>
     where
-        Self: SlotRef<K>,
+        Self: SlotRef,
     {
         if self.has_key() {
             Either::Left(self.key())
@@ -292,7 +430,7 @@ pub trait CheckedSlot<K>: Slot<K> {
     /// If this slot can be interpreted as both a key and value, prefer the key
     fn as_either_mut(&mut self) -> Either<K, &mut Self::Value>
     where
-        Self: SlotMut<K>,
+        Self: SlotMut,
     {
         if self.has_key() {
             Either::Left(self.key())
@@ -314,20 +452,22 @@ impl<K, V> InitFrom<V> for Either<K, V> {
     }
 }
 
-impl<K, V> Slot<K> for Either<K, V>
-where
-    K: Clone,
-{
+impl<K, V> Slot for Either<K, V> {
     type Value = V;
-
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    fn from_key(key: K) -> Self {
-        Self::Left(key)
-    }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn try_into_value(self) -> Option<Self::Value> {
         self.right()
+    }
+}
+
+impl<K, V> KeySlot<K> for Either<K, V>
+where
+    K: Clone,
+{
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn from_key(key: K) -> Self {
+        Self::Left(key)
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
@@ -336,20 +476,14 @@ where
     }
 }
 
-impl<K, V> SlotRef<K> for Either<K, V>
-where
-    K: Clone,
-{
+impl<K, V> SlotRef for Either<K, V> {
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn try_value(&self) -> Option<&Self::Value> {
         self.as_ref().right()
     }
 }
 
-impl<K, V> SlotMut<K> for Either<K, V>
-where
-    K: Clone,
-{
+impl<K, V> SlotMut for Either<K, V> {
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn try_value_mut(&mut self) -> Option<&mut Self::Value> {
         self.as_mut().right()
@@ -437,48 +571,79 @@ mod test {
     }
 
     #[test]
-    fn id_slot_impl() {
-        assert_eq!(IdSlot(5).try_key(), Some(5));
-        assert_eq!(IdSlot(5).key(), 5);
-        assert_eq!(IdSlot(5).try_into_value(), Some(5));
-        assert_eq!(IdSlot(5).into_value(), 5);
-        assert_eq!(IdSlot(5).try_value(), Some(&5));
-        assert_eq!(IdSlot(6).try_value_mut(), Some(&mut 6));
-        assert_eq!(IdSlot(5).value(), &5);
-        assert_eq!(IdSlot(6).value_mut(), &mut 6);
-        assert_eq!(IdSlot(5).try_swap(Either::Left(7)), Some(5));
+    fn default_slot_impl() {
+        assert_eq!(DefaultSlot(5).try_key(), Some(5));
+        assert_eq!(DefaultSlot(5).key(), 5);
+        assert_eq!(DefaultSlot(5).try_into_value(), Some(5));
+        assert_eq!(DefaultSlot(5).into_value(), 5);
+        assert_eq!(DefaultSlot(5).try_value(), Some(&5));
+        assert_eq!(DefaultSlot(6).try_value_mut(), Some(&mut 6));
+        assert_eq!(DefaultSlot(5).value(), &5);
+        assert_eq!(DefaultSlot(6).value_mut(), &mut 6);
+        assert_eq!(DefaultSlot(5).try_swap(Either::Left(7)), Some(5));
+        let mut slot = DefaultSlot(7);
+        assert_eq!(slot.try_remove_value(), Some(7));
+        assert_eq!(slot, DefaultSlot(0));
+        assert_eq!(slot.remove_value(), 0);
+        assert_eq!(slot, DefaultSlot(0));
+        slot.set_value(5);
+        assert_eq!(slot, DefaultSlot(5));
+        slot.delete_value();
+        assert_eq!(slot, DefaultSlot(0));
+    }
+
+    #[test]
+    fn clone_slot_impl() {
+        assert_eq!(CloneSlot(5).try_key(), Some(5));
+        assert_eq!(CloneSlot(5).key(), 5);
+        assert_eq!(CloneSlot(5).try_into_value(), Some(5));
+        assert_eq!(CloneSlot(5).into_value(), 5);
+        assert_eq!(CloneSlot(5).try_value(), Some(&5));
+        assert_eq!(CloneSlot(6).try_value_mut(), Some(&mut 6));
+        assert_eq!(CloneSlot(5).value(), &5);
+        assert_eq!(CloneSlot(6).value_mut(), &mut 6);
+        assert_eq!(CloneSlot(5).try_swap(Either::Left(7)), Some(5));
+        let mut slot = CloneSlot(7);
+        assert_eq!(slot.try_remove_value(), Some(7));
+        assert_eq!(slot, CloneSlot(7));
+        assert_eq!(slot.remove_value(), 7);
+        assert_eq!(slot, CloneSlot(7));
+        slot.delete_value();
+        assert_eq!(slot, CloneSlot(7));
     }
 
     #[derive(PartialEq, Copy, Clone)]
     enum MySlot {
         Key(u8),
-        Value(u16),
+        Val(u16),
     }
 
     impl InitFrom<u16> for MySlot {
         fn from_value(value: u16) -> Self {
-            MySlot::Value(value)
+            MySlot::Val(value)
         }
 
         fn set_value(&mut self, new: u16) {
-            *self = MySlot::Value(new)
+            *self = MySlot::Val(new)
         }
     }
 
-    impl Slot<u8> for MySlot {
+    impl Slot for MySlot {
         type Value = u16;
 
         fn try_into_value(self) -> Option<u16> {
             match self {
                 MySlot::Key(_) => None,
-                MySlot::Value(v) => Some(v),
+                MySlot::Val(v) => Some(v),
             }
         }
+    }
 
+    impl KeySlot<u8> for MySlot {
         fn try_key(&self) -> Option<u8> {
             match self {
                 MySlot::Key(k) => Some(*k),
-                MySlot::Value(_) => None,
+                MySlot::Val(_) => None,
             }
         }
 
@@ -487,27 +652,40 @@ mod test {
         }
     }
 
-    impl SlotRef<u8> for MySlot {
-        fn try_value(&self) -> Option<&u16> {
+    impl RemoveSlot for MySlot {
+        fn try_remove_value(&mut self) -> Option<Self::Value> {
             match self {
                 MySlot::Key(_) => None,
-                MySlot::Value(v) => Some(v),
+                MySlot::Val(v) => {
+                    let v = *v;
+                    *self = MySlot::Key(0);
+                    Some(v)
+                }
             }
         }
     }
 
-    impl SlotMut<u8> for MySlot {
+    impl SlotRef for MySlot {
+        fn try_value(&self) -> Option<&u16> {
+            match self {
+                MySlot::Key(_) => None,
+                MySlot::Val(v) => Some(v),
+            }
+        }
+    }
+
+    impl SlotMut for MySlot {
         fn try_value_mut(&mut self) -> Option<&mut u16> {
             match self {
                 MySlot::Key(_) => None,
-                MySlot::Value(v) => Some(v),
+                MySlot::Val(v) => Some(v),
             }
         }
     }
 
     impl CheckedSlot<u8> for MySlot {
         fn has_value(&self) -> bool {
-            matches!(self, MySlot::Value(_))
+            matches!(self, MySlot::Val(_))
         }
 
         fn has_key(&self) -> bool {
@@ -516,7 +694,7 @@ mod test {
     }
 
     #[test]
-    fn default_slot_impl() {
+    fn default_impls() {
         let mut e = MySlot::Key(5);
         assert_eq!(e.key(), 5);
         assert_eq!(e.try_key(), Some(5));
@@ -560,5 +738,7 @@ mod test {
         assert_eq!(e.into_either(), Either::Right(15));
         assert_eq!(e.as_either(), Either::Right(&15));
         assert_eq!(e.as_either_mut(), Either::Right(&mut 15));
+        assert_eq!(e.remove_value(), 15);
+        assert_eq!(e.as_either(), Either::Left(0));
     }
 }

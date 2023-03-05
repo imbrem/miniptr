@@ -1,6 +1,10 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use either::Either;
-use miniptr::{pool::slab::SlabPool, pool::*, slot::IdSlot};
+use miniptr::{
+    pool::slab::KeySlabPool,
+    pool::{slab::SlabPool, *},
+    slot::DefaultSlot,
+};
 use rand::{Rng, SeedableRng};
 use rand_xoshiro::Xoshiro256StarStar;
 
@@ -12,7 +16,7 @@ fn pool_benchmark(c: &mut Criterion) {
 
     for size in [10, 100, 1000, 10000, 1000000] {
         let mut trace: Vec<isize> = Vec::new();
-        let mut pool: SlabPool<Either<usize, usize>> = SlabPool::new();
+        let mut pool: KeySlabPool<Either<usize, usize>> = KeySlabPool::new();
         let mut inserted = Vec::new();
         for _ in 0..size {
             if !inserted.is_empty() && rng.gen_bool(REMOVAL_FRACTION) {
@@ -29,7 +33,7 @@ fn pool_benchmark(c: &mut Criterion) {
         group.throughput(criterion::Throughput::Elements(size));
         group.bench_with_input(BenchmarkId::new("either", size), &size, |b, _| {
             b.iter(|| {
-                let mut pool: SlabPool<Either<usize, usize>> = SlabPool::new();
+                let mut pool: KeySlabPool<Either<usize, usize>> = KeySlabPool::new();
                 for &event in trace.iter() {
                     if event >= 0 {
                         black_box(pool.insert(event as usize));
@@ -41,9 +45,23 @@ fn pool_benchmark(c: &mut Criterion) {
             })
         });
 
-        group.bench_with_input(BenchmarkId::new("id", size), &size, |b, _| {
+        group.bench_with_input(BenchmarkId::new("default-key", size), &size, |b, _| {
             b.iter(|| {
-                let mut pool: SlabPool<IdSlot<usize>> = SlabPool::new();
+                let mut pool: KeySlabPool<DefaultSlot<usize>> = KeySlabPool::new();
+                for &event in trace.iter() {
+                    if event >= 0 {
+                        black_box(pool.insert(event as usize));
+                    } else {
+                        black_box(pool.remove(-(event + 1) as usize));
+                    }
+                    black_box(&mut pool);
+                }
+            })
+        });
+
+        group.bench_with_input(BenchmarkId::new("default", size), &size, |b, _| {
+            b.iter(|| {
+                let mut pool: SlabPool<DefaultSlot<usize>> = SlabPool::new();
                 for &event in trace.iter() {
                     if event >= 0 {
                         black_box(pool.insert(event as usize));

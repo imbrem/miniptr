@@ -8,14 +8,16 @@ use std::{
 
 use crate::{
     index::ContiguousIx,
-    slot::{InitFrom, Slot, SlotMut, SlotRef},
+    slot::{InitFrom, KeySlot, RemoveSlot, Slot, SlotMut, SlotRef},
 };
 
-use super::{Pool, Insert, PoolMut, PoolRef};
+use super::{Insert, Pool, PoolMut, PoolRef};
 
 /// A simple slab allocator supporting recycling of objects with a free-list
 ///
 /// Allocates indices of type `K` corresponding to slots of type `S`
+///
+/// For a potentially more efficient free-list based approach, consider [`KeySlabPool`]
 ///
 /// # Notes
 ///
@@ -24,13 +26,12 @@ use super::{Pool, Insert, PoolMut, PoolRef};
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SlabPool<S, K = usize> {
     pool: Vec<S>,
-    free_head: usize,
-    phantom_free: PhantomData<K>,
+    free_list: Vec<K>,
 }
 
 impl<S, K> Index<K> for SlabPool<S, K>
 where
-    S: SlotRef<K>,
+    S: SlotRef,
     K: ContiguousIx,
 {
     type Output = S::Value;
@@ -43,7 +44,7 @@ where
 
 impl<S, K> IndexMut<K> for SlabPool<S, K>
 where
-    S: SlotMut<K> + SlotRef<K>,
+    S: SlotMut + SlotRef,
     K: ContiguousIx,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
@@ -54,12 +55,247 @@ where
 
 impl<S, K> SlabPool<S, K>
 where
-    S: Slot<K>,
+    S: Slot,
     K: ContiguousIx,
 {
     /// Create a new, empty pool
     #[cfg_attr(not(tarpaulin), inline(always))]
     pub fn new() -> SlabPool<S, K> {
+        Self::with_capacity(0, 0)
+    }
+
+    /// Get a reference to a given slot
+    ///
+    /// Note this may expose unstable internal details of the pool data structure when used on a key which has been deleted.
+    /// Using interior mutability to modify the slot corresponding to a deleted key leaves the pool in an invalid state, though this will never cause UB.
+    ///
+    /// Returns `None` if `key` is invalid
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    pub fn get_slot(&self, key: K) -> Option<&S> {
+        self.pool.get(key.index())
+    }
+
+    /// Get a mutable reference to a given slot
+    ///
+    /// Note this may expose unstable internal details of the pool data structure when used on a key which has been deleted.
+    /// Modifying the slot corresponding to a deleted key leaves the pool in an invalid state, though this will never cause UB.
+    ///
+    /// Returns `None` if `key` is invalid
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    pub fn get_slot_mut(&mut self, key: K) -> Option<&mut S> {
+        self.pool.get_mut(key.index())
+    }
+
+    /// Create a new, empty pool with the given capacity
+    #[cfg_attr(not(tarpaulin), inline)]
+    pub fn with_capacity(capacity: usize, free_capacity: usize) -> SlabPool<S, K> {
+        SlabPool {
+            pool: Vec::with_capacity(capacity),
+            free_list: Vec::with_capacity(free_capacity),
+        }
+    }
+
+    /// Get the total capacity of this pool
+    #[cfg_attr(not(tarpaulin), inline)]
+    pub fn capacity(&self) -> usize {
+        self.pool.capacity()
+    }
+
+    /// Get the total number of slots in this pool
+    #[cfg_attr(not(tarpaulin), inline)]
+    pub fn total_slots(&self) -> usize {
+        self.pool.len()
+    }
+
+    /// Get the number of free slots in this pool.
+    ///
+    /// Note this is less than or equal to the free capacity
+    #[cfg_attr(not(tarpaulin), inline)]
+    pub fn free_slots(&self) -> usize {
+        self.free_list.len()
+    }
+
+    /// Get the free capacity of this pool. May take time linear in the size of the pool.
+    #[cfg_attr(not(tarpaulin), inline)]
+    pub fn free_capacity(&self) -> usize {
+        self.free_slots() + self.capacity() - self.total_slots()
+    }
+
+    /// Remove all entries from this pool, preserving its current capacity
+    #[cfg_attr(not(tarpaulin), inline)]
+    pub fn clear(&mut self) {
+        self.pool.clear();
+        self.free_list.clear();
+    }
+
+    /// Reserves capacity for at least `additional` more elements to be inserted
+    #[cfg_attr(not(tarpaulin), inline)]
+    pub fn reserve(&mut self, additional: usize) {
+        self.pool.reserve(additional)
+    }
+
+    /// Reserves capacity for at least `additional` more elements to be free'd
+    #[cfg_attr(not(tarpaulin), inline)]
+    pub fn reserve_free(&mut self, additional: usize) {
+        self.free_list.reserve(additional)
+    }
+
+    /// Shrink this pool's capacity as much as possible without changing any indices
+    #[cfg_attr(not(tarpaulin), inline)]
+    pub fn shrink_to_fit(&mut self) {
+        self.pool.shrink_to_fit();
+        self.free_list.shrink_to_fit();
+    }
+
+    /// Get the key that will be assigned to the next inserted value, or `None` if inserting a new value would cause the pool to overflow
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    pub fn next_key(&self) -> Option<K> {
+        self.free_list
+            .last()
+            .copied()
+            .or(K::try_new(self.pool.len()))
+    }
+}
+
+impl<S, K, V> Insert<K, V> for SlabPool<S, K>
+where
+    S: Slot + InitFrom<V>,
+    K: ContiguousIx,
+{
+    #[inline]
+    fn insert(&mut self, v: V) -> K {
+        match self.try_insert(v) {
+            Ok(k) => k,
+            Err(_) => panic!(
+                "Slab mapping out of space: current size {:?}",
+                self.pool.len()
+            ),
+        }
+    }
+
+    #[inline]
+    fn try_insert(&mut self, v: V) -> Result<K, V> {
+        if let Some(free) = self.free_list.pop() {
+            self.pool[free.index()].set_value(v);
+            Ok(free)
+        } else if let Some(ix) = K::try_new(self.pool.len()) {
+            self.pool.push(S::from_value(v));
+            Ok(ix)
+        } else {
+            Err(v)
+        }
+    }
+}
+
+impl<S, K> Pool<K> for SlabPool<S, K>
+where
+    S: RemoveSlot,
+    K: ContiguousIx,
+{
+    type Value = S::Value;
+
+    #[inline]
+    fn try_remove(&mut self, key: K) -> Option<Self::Value> {
+        let result = self.pool[key.index()].try_remove_value()?;
+        self.free_list.push(key);
+        Some(result)
+    }
+
+    #[inline]
+    fn remove(&mut self, key: K) -> Self::Value {
+        let result = self.pool[key.index()].remove_value();
+        self.free_list.push(key);
+        result
+    }
+
+    #[inline]
+    fn delete(&mut self, key: K) {
+        self.pool[key.index()].delete_value();
+        self.free_list.push(key)
+    }
+}
+
+impl<S, K> PoolRef<K> for SlabPool<S, K>
+where
+    S: RemoveSlot + SlotRef,
+    K: ContiguousIx,
+{
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_get(&self, key: K) -> Option<&Self::Value> {
+        self.pool.get(key.index())?.try_value()
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn get(&self, key: K) -> &Self::Value {
+        self.pool[key.index()].value()
+    }
+}
+
+impl<S, K> PoolMut<K> for SlabPool<S, K>
+where
+    S: RemoveSlot + SlotMut,
+    K: ContiguousIx,
+{
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_get_mut(&mut self, key: K) -> Option<&mut Self::Value> {
+        self.pool.get_mut(key.index())?.try_value_mut()
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn get_mut(&mut self, key: K) -> &mut Self::Value {
+        self.pool[key.index()].value_mut()
+    }
+}
+
+/// A simple slab allocator supporting recycling of objects with an intrusive free-list
+///
+/// Allocates indices of type `K` corresponding to slots of type `S`
+///
+/// For a non-intrusive free-list based approach, consider [`SlabPool`]
+///
+/// # Notes
+///
+/// The implementation of comparison will consider any two pools constructed by the same sequence of `insert` and `remove`/`delete` operations equivalent, but
+/// may consider two pools which map the same keys to the same values but were constructed by a different sequence of operations to be disequal.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct KeySlabPool<S, K = usize> {
+    pool: Vec<S>,
+    free_head: usize,
+    phantom_free: PhantomData<K>,
+}
+
+impl<S, K> Index<K> for KeySlabPool<S, K>
+where
+    S: SlotRef,
+    K: ContiguousIx,
+{
+    type Output = S::Value;
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn index(&self, index: K) -> &Self::Output {
+        self.pool[index.index()].value()
+    }
+}
+
+impl<S, K> IndexMut<K> for KeySlabPool<S, K>
+where
+    S: SlotMut + SlotRef,
+    K: ContiguousIx,
+{
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn index_mut(&mut self, index: K) -> &mut Self::Output {
+        self.pool[index.index()].value_mut()
+    }
+}
+
+impl<S, K> KeySlabPool<S, K>
+where
+    S: KeySlot<K>,
+    K: ContiguousIx,
+{
+    /// Create a new, empty pool
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    pub fn new() -> KeySlabPool<S, K> {
         Self::with_capacity(0)
     }
 
@@ -87,8 +323,8 @@ where
 
     /// Create a new, empty pool with the given capacity
     #[cfg_attr(not(tarpaulin), inline)]
-    pub fn with_capacity(capacity: usize) -> SlabPool<S, K> {
-        SlabPool {
+    pub fn with_capacity(capacity: usize) -> KeySlabPool<S, K> {
+        KeySlabPool {
             pool: Vec::with_capacity(capacity),
             free_head: 0,
             phantom_free: PhantomData,
@@ -157,9 +393,9 @@ where
     }
 }
 
-impl<S, K, V> Insert<K, V> for SlabPool<S, K>
+impl<S, K, V> Insert<K, V> for KeySlabPool<S, K>
 where
-    S: Slot<K> + InitFrom<V>,
+    S: KeySlot<K> + InitFrom<V>,
     K: ContiguousIx,
 {
     #[inline]
@@ -193,9 +429,9 @@ where
     }
 }
 
-impl<S, K> Pool<K> for SlabPool<S, K>
+impl<S, K> Pool<K> for KeySlabPool<S, K>
 where
-    S: Slot<K>,
+    S: KeySlot<K>,
     K: ContiguousIx,
 {
     type Value = S::Value;
@@ -239,9 +475,9 @@ where
     }
 }
 
-impl<S, K> PoolRef<K> for SlabPool<S, K>
+impl<S, K> PoolRef<K> for KeySlabPool<S, K>
 where
-    S: SlotRef<K>,
+    S: SlotRef + KeySlot<K>,
     K: ContiguousIx,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
@@ -255,9 +491,9 @@ where
     }
 }
 
-impl<S, K> PoolMut<K> for SlabPool<S, K>
+impl<S, K> PoolMut<K> for KeySlabPool<S, K>
 where
-    S: SlotMut<K>,
+    S: SlotMut + KeySlot<K>,
     K: ContiguousIx,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
@@ -273,7 +509,7 @@ where
 
 #[cfg(test)]
 mod test {
-    use crate::slot::IdSlot;
+    use crate::slot::{CloneSlot, DefaultSlot};
 
     use super::*;
     use either::Either;
@@ -281,8 +517,141 @@ mod test {
     use rand_xoshiro::Xoshiro256StarStar;
 
     #[test]
-    fn basic_pool_usage() {
-        let mut pool: SlabPool<Either<u8, String>, u8> = SlabPool::new();
+    fn basic_slab_pool_usage() {
+        let mut pool: SlabPool<DefaultSlot<String>, u8> = SlabPool::new();
+        assert_eq!(pool.total_slots(), 0);
+        assert_eq!(pool.free_slots(), 0);
+        assert_eq!(pool.capacity(), 0);
+        assert_eq!(pool.free_capacity(), 0);
+
+        pool.reserve(3);
+
+        assert_eq!(pool.total_slots(), 0);
+        assert_eq!(pool.free_slots(), 0);
+        assert!(pool.capacity() >= 3);
+        assert_eq!(pool.free_capacity(), pool.capacity());
+
+        // Test insertion
+        for i in 0..=255u8 {
+            assert_eq!(pool.next_key(), Some(i));
+            let k = pool.insert(format!("{i}"));
+            assert_eq!(k, i);
+        }
+        assert_eq!(pool.next_key(), None);
+        assert_eq!(pool.try_insert("256".to_string()), Err("256".to_string()));
+
+        assert_eq!(pool.total_slots(), 256);
+        assert_eq!(pool.free_slots(), 0);
+        let cap = pool.capacity();
+        assert!(cap >= 256);
+        assert_eq!(pool.free_capacity(), cap - pool.total_slots());
+
+        // Test reading
+        for i in 0..=255u8 {
+            let mut s = format!("{i}");
+            assert_eq!(pool.get_slot(i).unwrap().0, s);
+            assert_eq!(pool.get_slot_mut(i).unwrap().0, s);
+            assert_eq!(pool.get(i), &s);
+            assert_eq!(pool.get_mut(i), &mut s);
+            assert_eq!(pool[i], s);
+            s.push('a');
+            pool[i].push('a');
+            assert_eq!(&mut pool[i], &mut s);
+        }
+
+        // Test deleting
+        let mut free = 0;
+        for i in (0..=255u8).step_by(2) {
+            assert_eq!(pool.free_slots(), free);
+            assert_eq!(pool.remove(i), format!("{i}a"));
+            free += 1;
+            assert_eq!(pool.free_slots(), free);
+        }
+        assert_eq!(pool.total_slots(), 256);
+        assert_eq!(pool.free_slots(), 128);
+        assert_eq!(pool.capacity(), cap);
+
+        for i in 0..=255u8 {
+            let v = pool.get_slot(i).unwrap();
+            if i % 2 != 0 {
+                let mut s = format!("{i}a");
+                assert_eq!(v.0, s);
+                assert_eq!(pool.get(i), &s);
+                assert_eq!(pool[i], s);
+                s.push('b');
+                pool[i].push('b');
+                assert_eq!(&mut pool[i], &mut s);
+            }
+        }
+
+        // Test deleting everything
+        for i in (1..=255u8).step_by(2) {
+            pool.delete(i);
+        }
+
+        assert_eq!(pool.total_slots(), 256);
+        assert_eq!(pool.free_slots(), 256);
+        assert_eq!(pool.capacity(), cap);
+        assert_eq!(pool.free_capacity(), cap);
+
+        // Test re-inserting everything
+        let mut keys = Vec::new();
+
+        for i in 0..=255u8 {
+            assert!(pool.next_key().is_some());
+            keys.push(pool.insert(format!("{i}c")));
+        }
+        assert_eq!(pool.next_key(), None);
+        assert_eq!(pool.try_insert("256".to_string()), Err("256".to_string()));
+
+        assert_eq!(pool.total_slots(), 256);
+        assert_eq!(pool.free_slots(), 0);
+        assert_eq!(pool.capacity(), cap);
+
+        // Test reading
+        for i in 0..=255u8 {
+            let mut s = format!("{i}c");
+            assert_eq!(pool.get_slot(keys[i as usize]).unwrap().0, s);
+            assert_eq!(pool.get_slot_mut(keys[i as usize]).unwrap().0, s);
+            assert_eq!(pool.get(keys[i as usize]), &s);
+            assert_eq!(pool.try_get(keys[i as usize]), Some(&s));
+            assert_eq!(pool.get_mut(keys[i as usize]), &s);
+            assert_eq!(pool.try_get_mut(keys[i as usize]), Some(&mut s));
+            assert_eq!(pool[keys[i as usize]], s);
+            s.push('d');
+            pool[keys[i as usize]].push('d');
+            assert_eq!(&mut pool[keys[i as usize]], &mut s);
+        }
+
+        // Test shrinking and clearing
+        pool.shrink_to_fit();
+        assert_eq!(pool.total_slots(), 256);
+        assert_eq!(pool.free_slots(), 0);
+        assert_eq!(pool.capacity(), cap);
+        pool.clear();
+        assert_eq!(pool.total_slots(), 0);
+        assert_eq!(pool.free_slots(), 0);
+        assert_eq!(pool.capacity(), cap);
+        assert_eq!(pool.free_capacity(), cap);
+        pool.shrink_to_fit();
+        assert_eq!(pool.total_slots(), 0);
+        assert_eq!(pool.free_slots(), 0);
+        assert_eq!(pool.capacity(), 0);
+        assert_eq!(pool.free_capacity(), 0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn slab_insertion_overflow() {
+        let mut pool: SlabPool<DefaultSlot<usize>, u8> = SlabPool::new();
+        for i in 0..257 {
+            let _ = pool.insert(i);
+        }
+    }
+
+    #[test]
+    fn basic_key_slab_pool_usage() {
+        let mut pool: KeySlabPool<Either<u8, String>, u8> = KeySlabPool::new();
         assert_eq!(pool.total_slots(), 0);
         assert_eq!(pool.free_slots(), 0);
         assert_eq!(pool.capacity(), 0);
@@ -416,8 +785,8 @@ mod test {
 
     #[test]
     #[should_panic]
-    fn insertion_overflow() {
-        let mut pool: SlabPool<Either<u8, usize>, u8> = SlabPool::new();
+    fn key_slab_insertion_overflow() {
+        let mut pool: SlabPool<DefaultSlot<usize>, u8> = SlabPool::new();
         for i in 0..257 {
             let _ = pool.insert(i);
         }
@@ -429,7 +798,7 @@ mod test {
         const SIZE: usize = 1000;
         let mut rng = Xoshiro256StarStar::from_seed([0xAB; 32]);
         let mut trace: Vec<isize> = Vec::new();
-        let mut trace_pool: SlabPool<Either<usize, isize>> = SlabPool::new();
+        let mut trace_pool: KeySlabPool<Either<usize, isize>> = KeySlabPool::new();
         let mut inserted = Vec::new();
         for _ in 0..SIZE {
             if !inserted.is_empty() && rng.gen_bool(REMOVAL_FRACTION) {
@@ -443,7 +812,7 @@ mod test {
             }
         }
 
-        let mut pool: SlabPool<Either<usize, usize>> = SlabPool::new();
+        let mut pool: KeySlabPool<Either<usize, usize>> = KeySlabPool::new();
         for &event in trace.iter() {
             if event >= 0 {
                 assert_eq!(event as usize, pool.insert(event as usize));
@@ -452,7 +821,7 @@ mod test {
             }
         }
 
-        let mut pool: SlabPool<IdSlot<usize>> = SlabPool::new();
+        let mut pool: KeySlabPool<DefaultSlot<usize>> = KeySlabPool::new();
         for &event in trace.iter() {
             if event >= 0 {
                 assert_eq!(event as usize, pool.insert(event as usize));
@@ -461,7 +830,7 @@ mod test {
             }
         }
 
-        let mut pool: SlabPool<Either<usize, usize>> = SlabPool::new();
+        let mut pool: KeySlabPool<Either<usize, usize>> = KeySlabPool::new();
         for &event in trace.iter() {
             if event >= 0 {
                 assert_eq!(Ok(event as usize), pool.try_insert(event as usize));
@@ -473,7 +842,31 @@ mod test {
             }
         }
 
-        let mut pool: SlabPool<IdSlot<usize>> = SlabPool::new();
+        let mut pool: KeySlabPool<DefaultSlot<usize>> = KeySlabPool::new();
+        for &event in trace.iter() {
+            if event >= 0 {
+                assert_eq!(Ok(event as usize), pool.try_insert(event as usize));
+            } else {
+                assert_eq!(
+                    Some(-(event + 1) as usize),
+                    pool.try_remove(-(event + 1) as usize)
+                );
+            }
+        }
+
+        let mut pool: SlabPool<DefaultSlot<usize>> = SlabPool::new();
+        for &event in trace.iter() {
+            if event >= 0 {
+                assert_eq!(Ok(event as usize), pool.try_insert(event as usize));
+            } else {
+                assert_eq!(
+                    Some(-(event + 1) as usize),
+                    pool.try_remove(-(event + 1) as usize)
+                );
+            }
+        }
+
+        let mut pool: SlabPool<CloneSlot<usize>> = SlabPool::new();
         for &event in trace.iter() {
             if event >= 0 {
                 assert_eq!(Ok(event as usize), pool.try_insert(event as usize));
