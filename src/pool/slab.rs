@@ -11,6 +11,8 @@ use crate::{
     slot::{InitFrom, Slot, SlotMut, SlotRef},
 };
 
+use super::{Pool, Insert, PoolMut, PoolRef};
+
 /// A simple slab allocator supporting recycling of objects with a free-list
 ///
 /// Allocates indices of type `K` corresponding to slots of type `S`
@@ -59,28 +61,6 @@ where
     #[cfg_attr(not(tarpaulin), inline(always))]
     pub fn new() -> SlabPool<S, K> {
         Self::with_capacity(0)
-    }
-
-    /// Get a reference to the value of a given slot
-    ///
-    /// Panics or returns an arbitrary value if `key` is invalid
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    pub fn get(&self, key: K) -> &S::Value
-    where
-        S: SlotRef<K>,
-    {
-        self.pool[key.index()].value()
-    }
-
-    /// Get a mutable reference to the value of a given slot
-    ///
-    /// Panics or returns an arbitrary value if `key` is invalid
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    pub fn get_mut(&mut self, key: K) -> &mut S::Value
-    where
-        S: SlotMut<K>,
-    {
-        self.pool[key.index()].value_mut()
     }
 
     /// Get a reference to a given slot
@@ -175,15 +155,15 @@ where
     pub fn next_key(&self) -> Option<K> {
         K::try_new(self.free_head)
     }
+}
 
-    /// Insert `v` into the mapping, assigning a new key which is returned
-    ///
-    /// Panics if the mapping has run out of space
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    pub fn insert<V>(&mut self, v: V) -> K
-    where
-        S: InitFrom<V>,
-    {
+impl<S, K, V> Insert<K, V> for SlabPool<S, K>
+where
+    S: Slot<K> + InitFrom<V>,
+    K: ContiguousIx,
+{
+    #[inline]
+    fn insert(&mut self, v: V) -> K {
         match self.try_insert(v) {
             Ok(k) => k,
             Err(_) => panic!(
@@ -193,14 +173,8 @@ where
         }
     }
 
-    /// Insert `v` into the mapping, assigning a new key which is returned
-    ///
-    /// Returns `v` as an error if the mapping has run out of space
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    pub fn try_insert<V>(&mut self, v: V) -> Result<K, V>
-    where
-        S: InitFrom<V>,
-    {
+    #[inline]
+    fn try_insert(&mut self, v: V) -> Result<K, V> {
         let Some(key) = self.next_key() else { return Err(v) };
         self.free_head = if let Some(value) = self.pool.get_mut(self.free_head) {
             let key = value.key();
@@ -217,42 +191,83 @@ where
         };
         Ok(key)
     }
+}
 
-    /// Deletes the key `k` from the mapping, returning it's value
-    ///
-    /// Panics or returns an arbitrary value, leavein g `self` in an unspecified but valid state, if `k` is invalid.
-    /// `k` is considered invalid if it:
-    /// - Was not returned from `self.insert` or `self.try_insert`
-    /// - Has already been deleted
-    pub fn remove(&mut self, k: K) -> S::Value {
+impl<S, K> Pool<K> for SlabPool<S, K>
+where
+    S: Slot<K>,
+    K: ContiguousIx,
+{
+    type Value = S::Value;
+
+    #[inline]
+    fn try_remove(&mut self, key: K) -> Option<Self::Value> {
         let f = if self.free_head < self.pool.len() {
             K::new(self.free_head)
         } else {
-            k
+            key
         };
-        let ki = k.index();
+        let ki = key.index();
+        let result = self.pool.get_mut(ki)?.try_swap_key(f)?;
+        self.free_head = ki;
+        Some(result)
+    }
+
+    #[inline]
+    fn remove(&mut self, key: K) -> Self::Value {
+        let f = if self.free_head < self.pool.len() {
+            K::new(self.free_head)
+        } else {
+            key
+        };
+        let ki = key.index();
         let result = self.pool[ki].swap_key(f);
         self.free_head = ki;
         result
     }
 
-    /// Delete the key `k` from the mapping
-    ///
-    /// Depending on the implementation of `S: Slot`, this may be slightly more efficient than `remove` since resources used in the slot may be more effectively recycled.
-    ///
-    /// Leaves `self` in an unspecified but valid state or panics if `k` is invalid.
-    /// `k` is considered invalid if it:
-    /// - Was not returned from `self.insert` or `self.try_insert`
-    /// - Has already been deleted
-    pub fn delete(&mut self, k: K) {
+    #[inline]
+    fn delete(&mut self, key: K) {
         let f = if self.free_head < self.pool.len() {
             K::new(self.free_head)
         } else {
-            k
+            key
         };
-        let ki = k.index();
+        let ki = key.index();
         self.pool[ki].set_key(f);
         self.free_head = ki;
+    }
+}
+
+impl<S, K> PoolRef<K> for SlabPool<S, K>
+where
+    S: SlotRef<K>,
+    K: ContiguousIx,
+{
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_get(&self, key: K) -> Option<&Self::Value> {
+        self.pool.get(key.index())?.try_value()
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn get(&self, key: K) -> &Self::Value {
+        self.pool[key.index()].value()
+    }
+}
+
+impl<S, K> PoolMut<K> for SlabPool<S, K>
+where
+    S: SlotMut<K>,
+    K: ContiguousIx,
+{
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_get_mut(&mut self, key: K) -> Option<&mut Self::Value> {
+        self.pool.get_mut(key.index())?.try_value_mut()
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn get_mut(&mut self, key: K) -> &mut Self::Value {
+        self.pool[key.index()].value_mut()
     }
 }
 
@@ -312,7 +327,7 @@ mod test {
         let mut free = 0;
         for i in (0..=255u8).step_by(2) {
             assert_eq!(pool.free_slots(), free);
-            pool.remove(i);
+            assert_eq!(pool.remove(i), format!("{i}a"));
             free += 1;
             assert_eq!(pool.free_slots(), free);
         }
@@ -373,7 +388,9 @@ mod test {
                 Either::Right(&s)
             );
             assert_eq!(pool.get(keys[i as usize]), &s);
+            assert_eq!(pool.try_get(keys[i as usize]), Some(&s));
             assert_eq!(pool.get_mut(keys[i as usize]), &s);
+            assert_eq!(pool.try_get_mut(keys[i as usize]), Some(&mut s));
             assert_eq!(pool[keys[i as usize]], s);
             s.push('d');
             pool[keys[i as usize]].push('d');
@@ -402,7 +419,7 @@ mod test {
     fn insertion_overflow() {
         let mut pool: SlabPool<Either<u8, usize>, u8> = SlabPool::new();
         for i in 0..257 {
-            pool.insert(i);
+            let _ = pool.insert(i);
         }
     }
 
@@ -417,7 +434,7 @@ mod test {
         for _ in 0..SIZE {
             if !inserted.is_empty() && rng.gen_bool(REMOVAL_FRACTION) {
                 let remove = inserted.swap_remove(rng.gen_range(0..inserted.len()));
-                trace_pool.remove(remove);
+                let _ = trace_pool.remove(remove);
                 trace.push(-(remove as isize) - 1)
             } else {
                 let key = trace_pool.insert(0);
@@ -441,6 +458,30 @@ mod test {
                 assert_eq!(event as usize, pool.insert(event as usize));
             } else {
                 assert_eq!(-(event + 1) as usize, pool.remove(-(event + 1) as usize));
+            }
+        }
+
+        let mut pool: SlabPool<Either<usize, usize>> = SlabPool::new();
+        for &event in trace.iter() {
+            if event >= 0 {
+                assert_eq!(Ok(event as usize), pool.try_insert(event as usize));
+            } else {
+                assert_eq!(
+                    Some(-(event + 1) as usize),
+                    pool.try_remove(-(event + 1) as usize)
+                );
+            }
+        }
+
+        let mut pool: SlabPool<IdSlot<usize>> = SlabPool::new();
+        for &event in trace.iter() {
+            if event >= 0 {
+                assert_eq!(Ok(event as usize), pool.try_insert(event as usize));
+            } else {
+                assert_eq!(
+                    Some(-(event + 1) as usize),
+                    pool.try_remove(-(event + 1) as usize)
+                );
             }
         }
     }

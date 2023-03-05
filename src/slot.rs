@@ -26,15 +26,35 @@ pub trait Slot<K>: Sized + InitFrom<Self::Value> {
     ///
     /// A slot is guaranteed to contain a value if created using `Self::from_value`
     ///
+    /// Returns an arbitrary value if this slot does not contain a value
+    fn try_into_value(self) -> Option<Self::Value>;
+
+    /// If this slot contains a value, return it
+    ///
+    /// A slot is guaranteed to contain a value if created using `Self::from_value`
+    ///
     /// Panics or returns an arbitrary value if this slot does not contain a value
-    fn into_value(self) -> Self::Value;
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn into_value(self) -> Self::Value {
+        self.try_into_value().expect("slot does not contain value")
+    }
 
     /// If this slot contains a key, return it
     ///
     /// A slot is guaranteed to contain a key if created using `Self::from_key`
     ///
-    /// Panic or return an arbitrary value otherwise
-    fn key(&self) -> K;
+    /// Returns an arbitrary value if this slot does not contain a key
+    fn try_key(&self) -> Option<K>;
+
+    /// If this slot contains a key, return it
+    ///
+    /// A slot is guaranteed to contain a key if created using `Self::from_key`
+    ///
+    /// Panics or returns an arbitrary value if this slot does not contain a key
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn key(&self) -> K {
+        self.try_key().expect("slot does not contain key")
+    }
 
     /// Create a slot from a key
     fn from_key(key: K) -> Self;
@@ -59,12 +79,41 @@ pub trait Slot<K>: Sized + InitFrom<Self::Value> {
 
     /// Take this slot's value, replacing it with another
     ///
+    /// Return an arbitrary value if this slot does not contain a value
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_swap(&mut self, new: Either<K, Self::Value>) -> Option<Self::Value> {
+        match new {
+            Either::Left(left) => self.try_swap_key(left),
+            Either::Right(right) => self.try_swap_value(right),
+        }
+    }
+
+    /// Take this slot's value, replacing it with a key
+    ///
+    /// Return an arbitrary value if this slot does not contain a value
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_swap_key(&mut self, new: K) -> Option<Self::Value> {
+        let mut result = Self::from_key(new);
+        std::mem::swap(&mut result, self);
+        result.try_into_value()
+    }
+
+    /// Take this slot's value, replacing it with a new one
+    ///
+    /// Return an arbitrary value if this slot does not contain a value
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_swap_value(&mut self, new: Self::Value) -> Option<Self::Value> {
+        let mut result = Self::from_value(new);
+        std::mem::swap(&mut result, self);
+        result.try_into_value()
+    }
+
+    /// Take this slot's value, replacing it with another
+    ///
     /// Panic or return an arbitrary value if this slot does not contain a value
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn swap(&mut self, new: Either<K, Self::Value>) -> Self::Value {
-        let mut result = Self::from_either(new);
-        std::mem::swap(&mut result, self);
-        result.into_value()
+        self.try_swap(new).expect("slot does not contain value")
     }
 
     /// Take this slot's value, replacing it with a key
@@ -72,9 +121,7 @@ pub trait Slot<K>: Sized + InitFrom<Self::Value> {
     /// Panic or return an arbitrary value if this slot does not contain a value
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn swap_key(&mut self, new: K) -> Self::Value {
-        let mut result = Self::from_key(new);
-        std::mem::swap(&mut result, self);
-        result.into_value()
+        self.try_swap_key(new).expect("slot does not contain value")
     }
 
     /// Take this slot's value, replacing it with a new one
@@ -82,9 +129,8 @@ pub trait Slot<K>: Sized + InitFrom<Self::Value> {
     /// Panic or return an arbitrary value if this slot does not contain a value
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn swap_value(&mut self, new: Self::Value) -> Self::Value {
-        let mut result = Self::from_value(new);
-        std::mem::swap(&mut result, self);
-        result.into_value()
+        self.try_swap_value(new)
+            .expect("slot does not contain value")
     }
 }
 
@@ -94,8 +140,18 @@ pub trait SlotRef<K>: Slot<K> {
     ///
     /// A slot is guaranteed to contain a value if created using `Self::from_value`
     ///
+    /// Returns an arbitrary value otherwise
+    fn try_value(&self) -> Option<&Self::Value>;
+
+    /// If this slot contains a value, return a reference to it
+    ///
+    /// A slot is guaranteed to contain a value if created using `Self::from_value`
+    ///
     /// Panics or returns an arbitrary value otherwise
-    fn value(&self) -> &Self::Value;
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn value(&self) -> &Self::Value {
+        self.try_value().expect("slot does not contain value")
+    }
 }
 
 /// A slot which can be mutably dereferenced
@@ -104,8 +160,17 @@ pub trait SlotMut<K>: Slot<K> {
     ///
     /// A slot is guaranteed to contain a value if created using `Self::from_value`
     ///
+    /// Returns an arbitrary value otherwise
+    fn try_value_mut(&mut self) -> Option<&mut Self::Value>;
+
+    /// If this slot contains a value, return a mutable reference to it
+    ///
+    /// A slot is guaranteed to contain a value if created using `Self::from_value`
+    ///
     /// Panics or returns an arbitrary value otherwise
-    fn value_mut(&mut self) -> &mut Self::Value;
+    fn value_mut(&mut self) -> &mut Self::Value {
+        self.try_value_mut().expect("slot does not contain value")
+    }
 }
 
 /// The identity slot: contains a key, which can be interpreted as either a key or a value
@@ -132,8 +197,18 @@ where
     type Value = K;
 
     #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_into_value(self) -> Option<Self::Value> {
+        Some(self.0)
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
     fn into_value(self) -> Self::Value {
         self.0
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_key(&self) -> Option<K> {
+        Some(self.0.clone())
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
@@ -152,6 +227,11 @@ where
     K: Clone,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_value(&self) -> Option<&Self::Value> {
+        Some(&self.0)
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
     fn value(&self) -> &Self::Value {
         &self.0
     }
@@ -161,6 +241,11 @@ impl<K> SlotMut<K> for IdSlot<K>
 where
     K: Clone,
 {
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_value_mut(&mut self) -> Option<&mut Self::Value> {
+        Some(&mut self.0)
+    }
+
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn value_mut(&mut self) -> &mut Self::Value {
         &mut self.0
@@ -176,50 +261,6 @@ pub trait CheckedSlot<K>: Slot<K> {
 
     /// Whether this slot contains a key
     fn has_key(&self) -> bool;
-
-    /// If this slot contains a value, return it; otherwise, return `None`
-    fn try_into_value(self) -> Option<Self::Value> {
-        if self.has_value() {
-            Some(self.into_value())
-        } else {
-            None
-        }
-    }
-
-    /// If this slot contains a value, return a reference to it
-    fn try_value(&self) -> Option<&Self::Value>
-    where
-        Self: SlotRef<K>,
-    {
-        if self.has_value() {
-            Some(self.value())
-        } else {
-            None
-        }
-    }
-
-    /// If this slot contains a value, return a mutable reference to it; otherwise, return `None`
-    fn try_value_mut(&mut self) -> Option<&mut Self::Value>
-    where
-        Self: SlotMut<K>,
-    {
-        if self.has_value() {
-            Some(self.value_mut())
-        } else {
-            None
-        }
-    }
-
-    /// If this slot contains a key, return it; otherwise, return `None`
-    ///
-    /// A slot is guaranteed to contain a key if created using `Self::from_key`
-    fn try_key(&self) -> Option<K> {
-        if self.has_key() {
-            Some(self.key())
-        } else {
-            None
-        }
-    }
 
     /// Convert this slot into either a key or a value
     ///
@@ -285,13 +326,13 @@ where
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn into_value(self) -> Self::Value {
-        self.right().unwrap()
+    fn try_into_value(self) -> Option<Self::Value> {
+        self.right()
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn key(&self) -> K {
-        self.as_ref().left().unwrap().clone()
+    fn try_key(&self) -> Option<K> {
+        self.as_ref().left().cloned()
     }
 }
 
@@ -300,8 +341,8 @@ where
     K: Clone,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn value(&self) -> &Self::Value {
-        self.as_ref().right().unwrap()
+    fn try_value(&self) -> Option<&Self::Value> {
+        self.as_ref().right()
     }
 }
 
@@ -310,8 +351,8 @@ where
     K: Clone,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn value_mut(&mut self) -> &mut Self::Value {
-        self.as_mut().right().unwrap()
+    fn try_value_mut(&mut self) -> Option<&mut Self::Value> {
+        self.as_mut().right()
     }
 }
 
@@ -327,26 +368,6 @@ where
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn has_key(&self) -> bool {
         self.is_left()
-    }
-
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_into_value(self) -> Option<Self::Value> {
-        self.right()
-    }
-
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_value(&self) -> Option<&Self::Value> {
-        self.as_ref().right()
-    }
-
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_value_mut(&mut self) -> Option<&mut Self::Value> {
-        self.as_mut().right()
-    }
-
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_key(&self) -> Option<K> {
-        self.as_ref().left().cloned()
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
@@ -417,8 +438,15 @@ mod test {
 
     #[test]
     fn id_slot_impl() {
+        assert_eq!(IdSlot(5).try_key(), Some(5));
+        assert_eq!(IdSlot(5).key(), 5);
+        assert_eq!(IdSlot(5).try_into_value(), Some(5));
+        assert_eq!(IdSlot(5).into_value(), 5);
+        assert_eq!(IdSlot(5).try_value(), Some(&5));
+        assert_eq!(IdSlot(6).try_value_mut(), Some(&mut 6));
         assert_eq!(IdSlot(5).value(), &5);
         assert_eq!(IdSlot(6).value_mut(), &mut 6);
+        assert_eq!(IdSlot(5).try_swap(Either::Left(7)), Some(5));
     }
 
     #[derive(PartialEq, Copy, Clone)]
@@ -440,17 +468,17 @@ mod test {
     impl Slot<u8> for MySlot {
         type Value = u16;
 
-        fn into_value(self) -> u16 {
+        fn try_into_value(self) -> Option<u16> {
             match self {
-                MySlot::Key(_) => unreachable!(),
-                MySlot::Value(v) => v,
+                MySlot::Key(_) => None,
+                MySlot::Value(v) => Some(v),
             }
         }
 
-        fn key(&self) -> u8 {
+        fn try_key(&self) -> Option<u8> {
             match self {
-                MySlot::Key(k) => *k,
-                MySlot::Value(_) => unreachable!(),
+                MySlot::Key(k) => Some(*k),
+                MySlot::Value(_) => None,
             }
         }
 
@@ -460,19 +488,19 @@ mod test {
     }
 
     impl SlotRef<u8> for MySlot {
-        fn value(&self) -> &u16 {
+        fn try_value(&self) -> Option<&u16> {
             match self {
-                MySlot::Key(_) => unreachable!(),
-                MySlot::Value(v) => v,
+                MySlot::Key(_) => None,
+                MySlot::Value(v) => Some(v),
             }
         }
     }
 
     impl SlotMut<u8> for MySlot {
-        fn value_mut(&mut self) -> &mut u16 {
+        fn try_value_mut(&mut self) -> Option<&mut u16> {
             match self {
-                MySlot::Key(_) => unreachable!(),
-                MySlot::Value(v) => v,
+                MySlot::Key(_) => None,
+                MySlot::Value(v) => Some(v),
             }
         }
     }

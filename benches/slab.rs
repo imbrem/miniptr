@@ -1,6 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use either::Either;
-use miniptr::{slab::SlabPool, slot::IdSlot};
+use miniptr::{pool::slab::SlabPool, pool::*, slot::IdSlot};
 use rand::{Rng, SeedableRng};
 use rand_xoshiro::Xoshiro256StarStar;
 
@@ -17,7 +17,7 @@ fn pool_benchmark(c: &mut Criterion) {
         for _ in 0..size {
             if !inserted.is_empty() && rng.gen_bool(REMOVAL_FRACTION) {
                 let remove = inserted.swap_remove(rng.gen_range(0..inserted.len()));
-                pool.remove(remove);
+                let _ = pool.remove(remove);
                 trace.push(-(remove as isize) - 1)
             } else {
                 let key = pool.insert(0);
