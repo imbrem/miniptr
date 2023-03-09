@@ -99,42 +99,50 @@ pub trait RemovePool<K>: Pool<K> {
     }
 }
 
-/// A [`Pool`] providing read-only access to values
-pub trait PoolRef<K>: Pool<K> {
+/// A pool providing read-only access to values of type `V` given a key of type `K`
+pub trait GetRef<K, V> {
     /// Try to get a reference to the value associated with a given key
     ///
     /// May return an arbitrary value if provided an unrecognized key.
     #[must_use]
-    fn try_get(&self, key: K) -> Option<&Self::Value>;
+    fn try_get(&self, key: K) -> Option<&V>;
 
     /// Get a reference to the value associated with a given key
     ///
     /// May panic or return an arbitrary value if provided an unrecognized key.
     #[cfg_attr(not(tarpaulin), inline(always))]
     #[must_use]
-    fn get(&self, key: K) -> &Self::Value {
+    fn get(&self, key: K) -> &V {
         self.try_get(key).expect("cannot get unrecognized key")
     }
 }
 
-/// An [`Pool`] providing mutable access to values
-pub trait PoolMut<K>: Pool<K> {
+/// An pool providing mutable access to values given a key of type `K`
+pub trait GetMut<K, V> {
     /// Try to get a reference to the value associated with a given key
     ///
     /// May return an arbitrary value if provided an unrecognized key.
     #[must_use]
-    fn try_get_mut(&mut self, key: K) -> Option<&mut Self::Value>;
+    fn try_get_mut(&mut self, key: K) -> Option<&mut V>;
 
     /// Get a mutable reference to the value associated with a given key
     ///
     /// May panic or return an arbitrary value if provided an unrecognized key.
     #[cfg_attr(not(tarpaulin), inline(always))]
     #[must_use]
-    fn get_mut(&mut self, key: K) -> &mut Self::Value {
+    fn get_mut(&mut self, key: K) -> &mut V {
         self.try_get_mut(key)
             .expect("cannot mutably get unrecognized key")
     }
 }
+
+/// A [`Pool`] providing read-only access to values
+pub trait PoolRef<K>: Pool<K> + GetRef<K, Self::Value> {}
+impl<P, K> PoolRef<K> for P where P: Pool<K> + GetRef<K, Self::Value> {}
+
+/// An [`Pool`] providing mutable access to values
+pub trait PoolMut<K>: Pool<K> + GetMut<K, Self::Value> {}
+impl<P, K> PoolMut<K> for P where P: Pool<K> + GetMut<K, Self::Value> {}
 
 /// A [`Pool`] which does not contain any values, and is always full
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Default)]
@@ -168,16 +176,16 @@ impl<K, V> RemovePool<K> for EmptyPool<V> {
 
 impl<K, V> DoubleRemovePool<K> for EmptyPool<V> {}
 
-impl<K, V> PoolRef<K> for EmptyPool<V> {
+impl<K, V> GetRef<K, V> for EmptyPool<V> {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_get(&self, _key: K) -> Option<&Self::Value> {
+    fn try_get(&self, _key: K) -> Option<&V> {
         None
     }
 }
 
-impl<K, V> PoolMut<K> for EmptyPool<V> {
+impl<K, V> GetMut<K, V> for EmptyPool<V> {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_get_mut(&mut self, _key: K) -> Option<&mut Self::Value> {
+    fn try_get_mut(&mut self, _key: K) -> Option<&mut V> {
         None
     }
 }
@@ -252,22 +260,22 @@ where
     }
 }
 
-impl<K, V> PoolRef<K> for Arena<Vec<V>, K>
+impl<K, V> GetRef<K, V> for Arena<Vec<V>, K>
 where
     K: ContiguousIx,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_get(&self, key: K) -> Option<&Self::Value> {
+    fn try_get(&self, key: K) -> Option<&V> {
         self.0.get(key.index())
     }
 }
 
-impl<K, V> PoolMut<K> for Arena<Vec<V>, K>
+impl<K, V> GetMut<K, V> for Arena<Vec<V>, K>
 where
     K: ContiguousIx,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_get_mut(&mut self, key: K) -> Option<&mut Self::Value> {
+    fn try_get_mut(&mut self, key: K) -> Option<&mut V> {
         self.0.get_mut(key.index())
     }
 }

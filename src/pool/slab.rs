@@ -11,7 +11,7 @@ use crate::{
     slot::{InitFrom, KeySlot, RemoveSlot, Slot, SlotMut, SlotRef},
 };
 
-use super::{Insert, Pool, PoolMut, PoolRef, RemovePool};
+use super::{GetMut, GetRef, Insert, Pool, RemovePool};
 
 /// A simple slab allocator supporting recycling of objects with a free-list
 ///
@@ -221,34 +221,34 @@ where
     }
 }
 
-impl<S, K> PoolRef<K> for SlabPool<S, K>
+impl<S, K> GetRef<K, S::Value> for SlabPool<S, K>
 where
     S: RemoveSlot + SlotRef,
     K: ContiguousIx,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_get(&self, key: K) -> Option<&Self::Value> {
+    fn try_get(&self, key: K) -> Option<&S::Value> {
         self.pool.get(key.index())?.try_value()
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn get(&self, key: K) -> &Self::Value {
+    fn get(&self, key: K) -> &S::Value {
         self.pool[key.index()].value()
     }
 }
 
-impl<S, K> PoolMut<K> for SlabPool<S, K>
+impl<S, K> GetMut<K, S::Value> for SlabPool<S, K>
 where
     S: RemoveSlot + SlotMut,
     K: ContiguousIx,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_get_mut(&mut self, key: K) -> Option<&mut Self::Value> {
+    fn try_get_mut(&mut self, key: K) -> Option<&mut S::Value> {
         self.pool.get_mut(key.index())?.try_value_mut()
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn get_mut(&mut self, key: K) -> &mut Self::Value {
+    fn get_mut(&mut self, key: K) -> &mut S::Value {
         self.pool[key.index()].value_mut()
     }
 }
@@ -487,34 +487,34 @@ where
     }
 }
 
-impl<S, K> PoolRef<K> for KeySlabPool<S, K>
+impl<S, K> GetRef<K, S::Value> for KeySlabPool<S, K>
 where
     S: SlotRef + KeySlot<K>,
     K: ContiguousIx,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_get(&self, key: K) -> Option<&Self::Value> {
+    fn try_get(&self, key: K) -> Option<&S::Value> {
         self.pool.get(key.index())?.try_value()
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn get(&self, key: K) -> &Self::Value {
+    fn get(&self, key: K) -> &S::Value {
         self.pool[key.index()].value()
     }
 }
 
-impl<S, K> PoolMut<K> for KeySlabPool<S, K>
+impl<S, K> GetMut<K, S::Value> for KeySlabPool<S, K>
 where
     S: SlotMut + KeySlot<K>,
     K: ContiguousIx,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_get_mut(&mut self, key: K) -> Option<&mut Self::Value> {
+    fn try_get_mut(&mut self, key: K) -> Option<&mut S::Value> {
         self.pool.get_mut(key.index())?.try_value_mut()
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn get_mut(&mut self, key: K) -> &mut Self::Value {
+    fn get_mut(&mut self, key: K) -> &mut S::Value {
         self.pool[key.index()].value_mut()
     }
 }
