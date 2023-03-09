@@ -9,6 +9,7 @@ use bytemuck::TransparentWrapper;
 use crate::index::ContiguousIx;
 
 pub mod slab;
+pub mod list;
 
 /// A pool which supports inserting values of type `V` for keys of type `K`
 pub trait Insert<K, V> {
