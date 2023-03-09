@@ -11,7 +11,7 @@ use crate::{
     slot::{InitFrom, KeySlot, RemoveSlot, Slot, SlotMut, SlotRef},
 };
 
-use super::{Insert, Pool, PoolMut, PoolRef};
+use super::{Insert, Pool, PoolMut, PoolRef, RemovePool};
 
 /// A simple slab allocator supporting recycling of objects with a free-list
 ///
@@ -195,6 +195,18 @@ where
     type Value = S::Value;
 
     #[inline]
+    fn delete(&mut self, key: K) {
+        self.pool[key.index()].delete_value();
+        self.free_list.push(key)
+    }
+}
+
+impl<S, K> RemovePool<K> for SlabPool<S, K>
+where
+    S: RemoveSlot,
+    K: ContiguousIx,
+{
+    #[inline]
     fn try_remove(&mut self, key: K) -> Option<Self::Value> {
         let result = self.pool[key.index()].try_remove_value()?;
         self.free_list.push(key);
@@ -206,12 +218,6 @@ where
         let result = self.pool[key.index()].remove_value();
         self.free_list.push(key);
         result
-    }
-
-    #[inline]
-    fn delete(&mut self, key: K) {
-        self.pool[key.index()].delete_value();
-        self.free_list.push(key)
     }
 }
 
@@ -437,6 +443,24 @@ where
     type Value = S::Value;
 
     #[inline]
+    fn delete(&mut self, key: K) {
+        let f = if self.free_head < self.pool.len() {
+            K::new(self.free_head)
+        } else {
+            key
+        };
+        let ki = key.index();
+        self.pool[ki].set_key(f);
+        self.free_head = ki;
+    }
+}
+
+impl<S, K> RemovePool<K> for KeySlabPool<S, K>
+where
+    S: KeySlot<K>,
+    K: ContiguousIx,
+{
+    #[inline]
     fn try_remove(&mut self, key: K) -> Option<Self::Value> {
         let f = if self.free_head < self.pool.len() {
             K::new(self.free_head)
@@ -460,18 +484,6 @@ where
         let result = self.pool[ki].swap_key(f);
         self.free_head = ki;
         result
-    }
-
-    #[inline]
-    fn delete(&mut self, key: K) {
-        let f = if self.free_head < self.pool.len() {
-            K::new(self.free_head)
-        } else {
-            key
-        };
-        let ki = key.index();
-        self.pool[ki].set_key(f);
-        self.free_head = ki;
     }
 }
 

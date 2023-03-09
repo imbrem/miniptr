@@ -4,6 +4,10 @@ A trait for simple allocators
 
 use std::marker::PhantomData;
 
+use bytemuck::TransparentWrapper;
+
+use crate::index::ContiguousIx;
+
 pub mod slab;
 
 /// A pool which supports inserting values of type `V` for keys of type `K`
@@ -12,13 +16,18 @@ pub trait Insert<K, V> {
     ///
     /// Returns `val` as an error if the arena has run out of space
     #[must_use]
-    fn try_insert(&mut self, val: V) -> Result<K, V>;
+    fn try_insert(&mut self, val: V) -> Result<K, V>
+    where
+        V: Sized;
 
     /// Insert `v` into the pool, assigning a new key which is returned
     ///
     /// Panics if the pool has run out of space
     #[must_use]
-    fn insert(&mut self, val: V) -> K {
+    fn insert(&mut self, val: V) -> K
+    where
+        V: Sized,
+    {
         match self.try_insert(val) {
             Ok(key) => key,
             Err(_) => panic!("arena out of space"),
@@ -28,32 +37,12 @@ pub trait Insert<K, V> {
 
 /// A pool mapping keys of type `K` to values of type `V`
 pub trait Pool<K>: Insert<K, Self::Value> {
-    /// The value stored by this allocator
+    /// The value type stored by this pool
     type Value;
 
-    /// Deletes the key `k` from the mapping, returning its value.
-    ///
-    /// Returns an arbitrary value, leaving `self` in an unspecified but valid state, if `k` is unrecognized.
-    /// `k` is considered unrecognized if it:
-    /// - Was not returned from `self.insert` or `self.try_insert`
-    /// - Has already been deleted
-    #[must_use]
-    fn try_remove(&mut self, key: K) -> Option<Self::Value>;
-
-    /// Deletes the key `k` from the mapping, returning its value.
-    ///
-    /// Panics or returns an arbitrary value, leaving `self` in an unspecified but valid state, if `k` is unrecognized.
-    /// `k` is considered unrecognized if it:
-    /// - Was not returned from `self.insert` or `self.try_insert`
-    /// - Has already been deleted
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    #[must_use]
-    fn remove(&mut self, key: K) -> Self::Value {
-        self.try_remove(key)
-            .expect("cannot remove unrecognized key")
-    }
-
     /// Deletes the key `k` from the mapping.
+    ///
+    /// Note that this is *not* guaranteed to do anything; in pools which do not support the removal of keys, this may simply be a no-op.
     ///
     /// Depending on the implementation of `Pool`, this may be slightly more efficient than `remove` since resources used may be more effectively recycled.
     ///
@@ -63,9 +52,50 @@ pub trait Pool<K>: Insert<K, Self::Value> {
     /// - Has already been deleted
     ///
     /// This method is provided as a convenience for users who do not need to retrieve the value associated with the key and simply want to remove it from the pool.
+    fn delete(&mut self, key: K);
+}
+
+/// A [`Pool`] for which `Pool::delete` may be called multiple times on the same key without modifying any other key; panicking is allowed.
+///
+/// If [`RemovePool`] is also implemented, `Self::remove` may still return an arbitrary value on a deleted key, but may *not* modify any other key.
+pub trait SafeFreePool<K>: Pool<K> {}
+
+/// A [`Pool`] for which `Pool::delete` may be called multiple times on the same key without panicking or modifying any other key.
+///
+/// If [`RemovePool`] is also implemented, `Self::remove` may still return an arbitrary value on a deleted key, but may *not* panic or modify any other key.
+/// For stronger bounds on this, consider requiring [`DoubleRemovePool`].
+pub trait DoubleFreePool<K>: SafeFreePool<K> {}
+
+/// A [`Pool`] for which `Pool::remove` may be called multiple times on the same key, and is guaranteed to return `None` on previously removed keys
+pub trait DoubleRemovePool<K>: DoubleFreePool<K> {}
+
+/// A [`Pool`] supporting the removal of keys
+pub trait RemovePool<K>: Pool<K> {
+    /// Deletes the key `k` from the mapping, returning its value.
+    ///
+    /// Returns an arbitrary value, leaving `self` in an unspecified but valid state, if `k` is unrecognized.
+    /// `k` is considered unrecognized if it:
+    /// - Was not returned from `self.insert` or `self.try_insert`
+    /// - Has already been deleted
+    #[must_use]
+    fn try_remove(&mut self, key: K) -> Option<Self::Value>
+    where
+        Self::Value: Sized;
+
+    /// Deletes the key `k` from the mapping, returning its value.
+    ///
+    /// Panics or returns an arbitrary value, leaving `self` in an unspecified but valid state, if `k` is unrecognized.
+    /// `k` is considered unrecognized if it:
+    /// - Was not returned from `self.insert` or `self.try_insert`
+    /// - Has already been deleted
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn delete(&mut self, key: K) {
-        let _ = self.remove(key);
+    #[must_use]
+    fn remove(&mut self, key: K) -> Self::Value
+    where
+        Self::Value: Sized,
+    {
+        self.try_remove(key)
+            .expect("cannot remove unrecognized key")
     }
 }
 
@@ -121,10 +151,22 @@ impl<K, V> Pool<K> for EmptyPool<V> {
     type Value = V;
 
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_remove(&mut self, _key: K) -> Option<Self::Value> {
+    fn delete(&mut self, _key: K) {
+        // This is a no-op, since all keys are "already deleted"
+    }
+}
+
+impl<K, V> SafeFreePool<K> for EmptyPool<V> {}
+impl<K, V> DoubleFreePool<K> for EmptyPool<V> {}
+
+impl<K, V> RemovePool<K> for EmptyPool<V> {
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_remove(&mut self, _key: K) -> Option<V> {
         None
     }
 }
+
+impl<K, V> DoubleRemovePool<K> for EmptyPool<V> {}
 
 impl<K, V> PoolRef<K> for EmptyPool<V> {
     #[cfg_attr(not(tarpaulin), inline(always))]
@@ -137,6 +179,96 @@ impl<K, V> PoolMut<K> for EmptyPool<V> {
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn try_get_mut(&mut self, _key: K) -> Option<&mut Self::Value> {
         None
+    }
+}
+
+/// A wrapper around [`Vec`] implementing an arena allocator for a type `V`
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Default, TransparentWrapper)]
+#[repr(transparent)]
+#[transparent(V)]
+pub struct Arena<V, K = usize>(V, PhantomData<K>);
+
+impl<V> Arena<Vec<V>> {
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    pub fn new(value: Vec<V>) -> Arena<Vec<V>> {
+        Arena(value, PhantomData)
+    }
+}
+
+impl<V, K> From<V> for Arena<V, K> {
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn from(value: V) -> Self {
+        Arena(value, PhantomData)
+    }
+}
+
+impl<K, V> Insert<K, V> for Arena<Vec<V>, K>
+where
+    K: ContiguousIx,
+{
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_insert(&mut self, val: V) -> Result<K, V>
+    where
+        V: Sized,
+    {
+        let Some(ix) = K::try_new(self.0.len()) else { return Err(val) };
+        self.0.push(val);
+        Ok(ix)
+    }
+}
+
+impl<K, V> Pool<K> for Arena<Vec<V>, K>
+where
+    K: ContiguousIx,
+{
+    type Value = V;
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn delete(&mut self, _key: K) {
+        // This is a no-op, since `Arena` does not support deleting keys
+    }
+}
+
+impl<K, V> SafeFreePool<K> for Arena<Vec<V>, K> where K: ContiguousIx {}
+impl<K, V> DoubleFreePool<K> for Arena<Vec<V>, K> where K: ContiguousIx {}
+
+impl<K, V> RemovePool<K> for Arena<Vec<V>, K>
+where
+    K: ContiguousIx,
+    V: Default,
+{
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_remove(&mut self, key: K) -> Option<Self::Value>
+    where
+        Self::Value: Sized,
+    {
+        // NOTE: this replaces the value with `Default`, whereas `delete` is a no-op.
+        //
+        // This is acceptable behaviour, since the value of a key after a delete operation is undefined, *but*
+        let r = self.0.get_mut(key.index())?;
+        let mut result = V::default();
+        std::mem::swap(&mut result, r);
+        Some(result)
+    }
+}
+
+impl<K, V> PoolRef<K> for Arena<Vec<V>, K>
+where
+    K: ContiguousIx,
+{
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_get(&self, key: K) -> Option<&Self::Value> {
+        self.0.get(key.index())
+    }
+}
+
+impl<K, V> PoolMut<K> for Arena<Vec<V>, K>
+where
+    K: ContiguousIx,
+{
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_get_mut(&mut self, key: K) -> Option<&mut Self::Value> {
+        self.0.get_mut(key.index())
     }
 }
 
@@ -157,8 +289,7 @@ mod test {
     }
 
     #[test]
-    #[should_panic]
-    fn empty_pool_delete_fails() {
+    fn empty_pool_delete() {
         let _ = EmptyPool::<u64>::default().delete(5);
     }
 
@@ -172,5 +303,18 @@ mod test {
     #[should_panic]
     fn empty_pool_get_mut_fails() {
         let _ = EmptyPool::<u64>::default().get_mut(5);
+    }
+
+    #[test]
+    fn basic_arena_usage() {
+        let mut arena = Arena::new(vec![]);
+        assert_eq!(arena.insert(5), 0);
+        arena.delete(0);
+        assert_eq!(arena.get(0), &5);
+        *arena.get_mut(0) = 6;
+        assert_eq!(arena.get(0), &6);
+        assert_eq!(arena.try_get(1), None);
+        assert_eq!(arena.try_remove(0), Some(6));
+        assert_eq!(arena.try_remove(0), Some(0));
     }
 }
