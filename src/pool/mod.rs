@@ -195,23 +195,31 @@ impl<K, V> GetMut<K, V> for EmptyPool<V> {
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Default, TransparentWrapper)]
 #[repr(transparent)]
 #[transparent(V)]
-pub struct Arena<V, K = usize>(V, PhantomData<K>);
+pub struct Arena<V, K = usize, D = ByDefault>(V, PhantomData<K>, PhantomData<D>);
+
+/// Remove a value from this arena by cloning it out
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Default, Zeroable)]
+pub struct ByClone;
+
+/// Remove a value from this arena by replacing it with `Default`
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Default, Zeroable)]
+pub struct ByDefault;
 
 impl<V> Arena<Vec<V>> {
     #[cfg_attr(not(tarpaulin), inline(always))]
     pub fn new(value: Vec<V>) -> Arena<Vec<V>> {
-        Arena(value, PhantomData)
+        Arena(value, PhantomData, PhantomData)
     }
 }
 
-impl<V, K> From<V> for Arena<V, K> {
+impl<V, K, D> From<V> for Arena<V, K, D> {
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn from(value: V) -> Self {
-        Arena(value, PhantomData)
+        Arena(value, PhantomData, PhantomData)
     }
 }
 
-impl<K, V> Insert<K, V> for Arena<Vec<V>, K>
+impl<K, V, D> Insert<K, V> for Arena<Vec<V>, K, D>
 where
     K: ContiguousIx,
 {
@@ -226,22 +234,47 @@ where
     }
 }
 
-impl<K, V> Pool<K> for Arena<Vec<V>, K>
+impl<K, V> Pool<K> for Arena<Vec<V>, K, ByClone>
 where
     K: ContiguousIx,
 {
     type Value = V;
 
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn delete(&mut self, _key: K) {
-        // This is a no-op, since `Arena` does not support deleting keys
+    fn delete(&mut self, _key: K) {}
+}
+
+impl<K, V> Pool<K> for Arena<Vec<V>, K, ByDefault>
+where
+    K: ContiguousIx,
+    V: Default,
+{
+    type Value = V;
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn delete(&mut self, key: K) {
+        if let Some(slot) = self.0.get_mut(key.index()) {
+            *slot = Default::default()
+        }
     }
 }
 
-impl<K, V> SafeFreePool<K> for Arena<Vec<V>, K> where K: ContiguousIx {}
-impl<K, V> DoubleFreePool<K> for Arena<Vec<V>, K> where K: ContiguousIx {}
+impl<K, V> SafeFreePool<K> for Arena<Vec<V>, K, ByClone> where K: ContiguousIx {}
+impl<K, V> DoubleFreePool<K> for Arena<Vec<V>, K, ByClone> where K: ContiguousIx {}
+impl<K, V> SafeFreePool<K> for Arena<Vec<V>, K, ByDefault>
+where
+    K: ContiguousIx,
+    V: Default,
+{
+}
+impl<K, V> DoubleFreePool<K> for Arena<Vec<V>, K, ByDefault>
+where
+    K: ContiguousIx,
+    V: Default,
+{
+}
 
-impl<K, V> RemovePool<K> for Arena<Vec<V>, K>
+impl<K, V> RemovePool<K> for Arena<Vec<V>, K, ByDefault>
 where
     K: ContiguousIx,
     V: Default,
@@ -251,13 +284,24 @@ where
     where
         Self::Value: Sized,
     {
-        // NOTE: this replaces the value with `Default`, whereas `delete` is a no-op.
-        //
-        // This is acceptable behaviour, since the value of a key after a delete operation is undefined, *but*
         let r = self.0.get_mut(key.index())?;
         let mut result = V::default();
         std::mem::swap(&mut result, r);
         Some(result)
+    }
+}
+
+impl<K, V> RemovePool<K> for Arena<Vec<V>, K, ByClone>
+where
+    K: ContiguousIx,
+    V: Clone,
+{
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_remove(&mut self, key: K) -> Option<Self::Value>
+    where
+        Self::Value: Sized,
+    {
+        self.0.get(key.index()).cloned()
     }
 }
 
