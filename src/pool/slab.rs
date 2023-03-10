@@ -11,7 +11,7 @@ use crate::{
     slot::{InitFrom, KeySlot, RemoveSlot, Slot, SlotMut, SlotRef},
 };
 
-use super::{GetMut, GetRef, Insert, Pool, RemovePool};
+use super::{GetMut, GetRef, Insert, Pool, Take};
 
 /// A simple slab allocator supporting recycling of objects with a free-list
 ///
@@ -201,20 +201,20 @@ where
     }
 }
 
-impl<S, K> RemovePool<K> for SlabPool<S, K>
+impl<S, K> Take<K, S::Value> for SlabPool<S, K>
 where
     S: RemoveSlot,
     K: ContiguousIx,
 {
     #[inline]
-    fn try_remove(&mut self, key: K) -> Option<Self::Value> {
+    fn try_take(&mut self, key: K) -> Option<S::Value> {
         let result = self.pool[key.index()].try_remove_value()?;
         self.free_list.push(key);
         Some(result)
     }
 
     #[inline]
-    fn remove(&mut self, key: K) -> Self::Value {
+    fn take(&mut self, key: K) -> S::Value {
         let result = self.pool[key.index()].remove_value();
         self.free_list.push(key);
         result
@@ -455,13 +455,13 @@ where
     }
 }
 
-impl<S, K> RemovePool<K> for KeySlabPool<S, K>
+impl<S, K> Take<K, S::Value> for KeySlabPool<S, K>
 where
     S: KeySlot<K>,
     K: ContiguousIx,
 {
     #[inline]
-    fn try_remove(&mut self, key: K) -> Option<Self::Value> {
+    fn try_take(&mut self, key: K) -> Option<S::Value> {
         let f = if self.free_head < self.pool.len() {
             K::new(self.free_head)
         } else {
@@ -474,7 +474,7 @@ where
     }
 
     #[inline]
-    fn remove(&mut self, key: K) -> Self::Value {
+    fn take(&mut self, key: K) -> S::Value {
         let f = if self.free_head < self.pool.len() {
             K::new(self.free_head)
         } else {
@@ -521,6 +521,7 @@ where
 
 #[cfg(test)]
 mod test {
+    use crate::pool::RemovePool;
     use crate::slot::{CloneSlot, DefaultSlot};
 
     use super::*;
