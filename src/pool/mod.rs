@@ -4,12 +4,12 @@ A trait for simple allocators
 
 use std::marker::PhantomData;
 
-use bytemuck::TransparentWrapper;
+use bytemuck::{TransparentWrapper, Zeroable};
 
 use crate::index::ContiguousIx;
 
-pub mod slab;
 pub mod list;
+pub mod slab;
 
 /// A pool which supports inserting values of type `V` for keys of type `K`
 pub trait Insert<K, V> {
@@ -146,7 +146,7 @@ pub trait PoolMut<K>: Pool<K> + GetMut<K, Self::Value> {}
 impl<P, K> PoolMut<K> for P where P: Pool<K> + GetMut<K, Self::Value> {}
 
 /// A [`Pool`] which does not contain any values, and is always full
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Default)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Default, Zeroable)]
 pub struct EmptyPool<V>(PhantomData<V>);
 
 impl<K, V> Insert<K, V> for EmptyPool<V> {
