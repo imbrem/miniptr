@@ -99,7 +99,7 @@ pub trait Take<K, V> {
 /// A [`Pool`] supporting the removal of keys
 pub trait RemovePool<K>: ObjectPool<K> + Take<K, Self::Value> {
     /// Deletes the key `k` from the mapping, returning its value.
-    /// 
+    ///
     /// Guaranteed to have the same behaviour as [`Take<K, Self::Value`]'s `try_take` method,
     ///
     /// Returns an arbitrary value, leaving `self` in an unspecified but valid state, if `k` is unrecognized.
@@ -113,7 +113,7 @@ pub trait RemovePool<K>: ObjectPool<K> + Take<K, Self::Value> {
     }
 
     /// Deletes the key `k` from the mapping, returning its value.
-    /// 
+    ///
     /// Guaranteed to have the same behaviour as [`Take<K, Self::Value`]'s `take` method,
     ///
     /// Panics or returns an arbitrary value, leaving `self` in an unspecified but valid state, if `k` is unrecognized.
@@ -412,6 +412,87 @@ where
     fn try_get_mut(&mut self, key: K) -> Option<&mut V> {
         self.0.get_mut(key.index())
     }
+}
+
+/// Forward implementations of [`Pool`], [`ObjectPool`], [`Insert`], [`Take`], [`GetRef`], and [`GetMut`] to a field of type `$P`
+#[macro_export]
+macro_rules! forward_pool_traits {
+    (<$($gen:ident),*> $ty:ty => ($e:tt) : $P:ty) => {
+        impl<$($gen,)* K> Pool<K> for $ty
+        where
+            $P: Pool<K>,
+        {
+            #[cfg_attr(not(tarpaulin), inline(always))]
+            fn delete(&mut self, key: K) {
+                self.$e.delete(key)
+            }
+        }
+
+        impl<$($gen,)* K> ObjectPool<K> for $ty
+        where
+            $P: ObjectPool<K>,
+        {
+            type Value = P::Value;
+        }
+
+        impl<$($gen,)* K, V> Insert<K, V> for $ty
+        where
+            $P: Insert<K, V>,
+        {
+            #[cfg_attr(not(tarpaulin), inline(always))]
+            fn try_insert(&mut self, val: V) -> Result<K, V> {
+                self.$e.try_insert(val)
+            }
+        }
+
+        impl<$($gen,)* K, V> GetRef<K, V> for $ty
+        where
+            $P: GetRef<K, V>,
+        {
+            #[cfg_attr(not(tarpaulin), inline(always))]
+            fn try_get(&self, key: K) -> Option<&V> {
+                self.$e.try_get(key)
+            }
+
+            #[cfg_attr(not(tarpaulin), inline(always))]
+            fn get(&self, key: K) -> &V {
+                self.$e.get(key)
+            }
+        }
+
+        impl<$($gen,)* K, V> GetMut<K, V> for $ty
+        where
+            $P: GetMut<K, V>,
+        {
+            #[cfg_attr(not(tarpaulin), inline(always))]
+            fn try_get_mut(&mut self, key: K) -> Option<&mut V> {
+                self.$e.try_get_mut(key)
+            }
+
+            #[cfg_attr(not(tarpaulin), inline(always))]
+            fn get_mut(&mut self, key: K) -> &mut V {
+                self.$e.get_mut(key)
+            }
+        }
+
+        impl<$($gen,)* K, V> Take<K, V> for $ty
+        where
+            $P: Take<K, V>,
+        {
+            #[cfg_attr(not(tarpaulin), inline(always))]
+            fn try_take(&mut self, key: K) -> Option<V> {
+                self.$e.try_take(key)
+            }
+
+            #[cfg_attr(not(tarpaulin), inline(always))]
+            fn take(&mut self, key: K) -> V {
+                self.$e.take(key)
+            }
+        }
+    };
+    (<$($gen:ident),*> $ty:ty => $P:ty) => {
+        $crate::forward_pool_traits!(<$($gen),*> $ty => (0): $P);
+    };
 }
 
 #[cfg(test)]
