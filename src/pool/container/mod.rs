@@ -3,11 +3,14 @@ Traits for container allocators
 */
 use super::*;
 
-/// A [`Pool`] allocating stacks containing elements of type `Self::Item`
-pub trait StackPool<K>: Pool<K> {
+/// A [`Pool`] allocating containers of `Self::Elem`
+pub trait ContainerPool<K>: Pool<K> {
     /// The type of items contained in this list
     type Elem;
+}
 
+/// A [`Pool`] allocating stacks containing elements of type `Self::Item`
+pub trait StackPool<K>: ContainerPool<K> {
     /// Allocate a new, empty list with the given capacity
     ///
     /// Note that the capacity is *not* guaranteed.
@@ -259,14 +262,21 @@ where
     }
 }
 
-impl<P, K> StackPool<K> for StackLikePool<P>
+impl<P, K> ContainerPool<K> for StackLikePool<P>
 where
     P: InsertPool<K> + PoolMut<K> + PoolRef<K>,
     K: Clone,
     P::Value: StackLike,
 {
     type Elem = <P::Value as StackLike>::Elem;
+}
 
+impl<P, K> StackPool<K> for StackLikePool<P>
+where
+    P: InsertPool<K> + PoolMut<K> + PoolRef<K>,
+    K: Clone,
+    P::Value: StackLike,
+{
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn new_with_capacity(&mut self, capacity: usize) -> Result<K, ()> {
         let stack = P::Value::new_stack_with_capacity(capacity)?;
@@ -275,10 +285,7 @@ where
 
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn pop(&mut self, key: K) -> Option<(K, Self::Elem)> {
-        self.0
-            .get_mut(key.clone())
-            .pop_stack()
-            .map(|v| (key, v))
+        self.0.get_mut(key.clone()).pop_stack().map(|v| (key, v))
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
