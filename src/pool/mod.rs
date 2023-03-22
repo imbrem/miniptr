@@ -8,7 +8,7 @@ use bytemuck::{TransparentWrapper, Zeroable};
 
 use crate::index::ContiguousIx;
 
-pub mod list;
+pub mod container;
 pub mod slab;
 
 /// A pool which supports inserting values of type `V` for keys of type `K`
@@ -31,11 +31,8 @@ pub trait Insert<K, V> {
     }
 }
 
-/// A pool mapping keys of type `K` to values of type `V`
+/// A pool indexed by keys of type `K` to values of type `V`
 pub trait Pool<K> {
-    /// The value type stored by this pool
-    type Value;
-
     /// Deletes the key `k` from the mapping.
     ///
     /// Note that this is *not* guaranteed to do anything; in pools which do not support the removal of keys, this may simply be a no-op.
@@ -51,8 +48,15 @@ pub trait Pool<K> {
     fn delete(&mut self, key: K);
 }
 
-pub trait InsertPool<K>: Pool<K> + Insert<K, Self::Value> {}
-impl<K, P> InsertPool<K> for P where P: Pool<K> + Insert<K, Self::Value> {}
+// A pool mapping keys of type `K` to values of type `V`
+pub trait ObjectPool<K>: Pool<K> {
+    /// The value type stored by this pool
+    type Value;
+}
+
+/// A pool supporting insertion of objects, yielding keys
+pub trait InsertPool<K>: ObjectPool<K> + Insert<K, Self::Value> {}
+impl<K, P> InsertPool<K> for P where P: ObjectPool<K> + Insert<K, Self::Value> {}
 
 /// A [`Pool`] for which `Pool::delete` may be called multiple times on the same key without modifying any other key; panicking is allowed.
 ///
@@ -93,7 +97,7 @@ pub trait Take<K, V> {
 }
 
 /// A [`Pool`] supporting the removal of keys
-pub trait RemovePool<K>: Pool<K> + Take<K, Self::Value> {
+pub trait RemovePool<K>: ObjectPool<K> + Take<K, Self::Value> {
     /// Deletes the key `k` from the mapping, returning its value.
     /// 
     /// Guaranteed to have the same behaviour as [`Take<K, Self::Value`]'s `try_take` method,
@@ -126,7 +130,7 @@ pub trait RemovePool<K>: Pool<K> + Take<K, Self::Value> {
     }
 }
 
-impl<P, K> RemovePool<K> for P where P: Pool<K> + Take<K, Self::Value> {}
+impl<P, K> RemovePool<K> for P where P: ObjectPool<K> + Take<K, Self::Value> {}
 
 /// A pool providing read-only access to values of type `V` given a key of type `K`
 pub trait GetRef<K, V> {
@@ -170,7 +174,7 @@ pub trait GetMut<K, V> {
 /// Automatically implemented for any [`Pool`] which implements [`GetRef<K, Self::Value>`].
 ///
 /// Provides wrappers around [`GetRef`] methods returning `&Self::Value`, which might be useful for type inference.
-pub trait PoolRef<K>: Pool<K> + GetRef<K, Self::Value> {
+pub trait PoolRef<K>: ObjectPool<K> + GetRef<K, Self::Value> {
     /// Try to get a reference to the value associated with a given key
     ///
     /// May return an arbitrary value if provided an unrecognized key.
@@ -189,14 +193,14 @@ pub trait PoolRef<K>: Pool<K> + GetRef<K, Self::Value> {
         self.get(key)
     }
 }
-impl<P, K> PoolRef<K> for P where P: Pool<K> + GetRef<K, Self::Value> {}
+impl<P, K> PoolRef<K> for P where P: ObjectPool<K> + GetRef<K, Self::Value> {}
 
 /// An [`Pool`] providing mutable access to values
 ///
 /// Automatically implemented for any [`Pool`] which implements [`GetMut<K, Self::Value>`].
 ///
 /// Provides wrappers around [`GetMut`] methods returning `&mut Self::Value`, which might be useful for type inference.
-pub trait PoolMut<K>: Pool<K> + GetMut<K, Self::Value> {
+pub trait PoolMut<K>: ObjectPool<K> + GetMut<K, Self::Value> {
     /// Try to get a reference to the value associated with a given key
     ///
     /// May return an arbitrary value if provided an unrecognized key.
@@ -215,7 +219,7 @@ pub trait PoolMut<K>: Pool<K> + GetMut<K, Self::Value> {
         self.get_mut(key)
     }
 }
-impl<P, K> PoolMut<K> for P where P: Pool<K> + GetMut<K, Self::Value> {}
+impl<P, K> PoolMut<K> for P where P: ObjectPool<K> + GetMut<K, Self::Value> {}
 
 /// A [`Pool`] which does not contain any values, and is always full
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Default, Zeroable)]
@@ -229,12 +233,14 @@ impl<K, V> Insert<K, V> for EmptyPool<V> {
 }
 
 impl<K, V> Pool<K> for EmptyPool<V> {
-    type Value = V;
-
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn delete(&mut self, _key: K) {
         // This is a no-op, since all keys are "already deleted"
     }
+}
+
+impl<K, V> ObjectPool<K> for EmptyPool<V> {
+    type Value = V;
 }
 
 impl<K, V> SafeFreePool<K> for EmptyPool<V> {}
@@ -310,10 +316,15 @@ impl<K, V> Pool<K> for Arena<Vec<V>, K, ByClone>
 where
     K: ContiguousIx,
 {
-    type Value = V;
-
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn delete(&mut self, _key: K) {}
+}
+
+impl<K, V> ObjectPool<K> for Arena<Vec<V>, K, ByClone>
+where
+    K: ContiguousIx,
+{
+    type Value = V;
 }
 
 impl<K, V> Pool<K> for Arena<Vec<V>, K, ByDefault>
@@ -321,14 +332,20 @@ where
     K: ContiguousIx,
     V: Default,
 {
-    type Value = V;
-
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn delete(&mut self, key: K) {
         if let Some(slot) = self.0.get_mut(key.index()) {
             *slot = Default::default()
         }
     }
+}
+
+impl<K, V> ObjectPool<K> for Arena<Vec<V>, K, ByDefault>
+where
+    K: ContiguousIx,
+    V: Default,
+{
+    type Value = V;
 }
 
 impl<K, V> SafeFreePool<K> for Arena<Vec<V>, K, ByClone> where K: ContiguousIx {}

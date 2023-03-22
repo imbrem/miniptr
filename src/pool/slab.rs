@@ -11,7 +11,7 @@ use crate::{
     slot::{InitFrom, KeySlot, RemoveSlot, Slot, SlotMut, SlotRef},
 };
 
-use super::{GetMut, GetRef, Insert, Pool, Take};
+use super::{GetMut, GetRef, Insert, ObjectPool, Pool, Take};
 
 /// A simple slab allocator supporting recycling of objects with a free-list
 ///
@@ -192,13 +192,19 @@ where
     S: RemoveSlot,
     K: ContiguousIx,
 {
-    type Value = S::Value;
-
     #[inline]
     fn delete(&mut self, key: K) {
         self.pool[key.index()].delete_value();
         self.free_list.push(key)
     }
+}
+
+impl<S, K> ObjectPool<K> for SlabPool<S, K>
+where
+    S: RemoveSlot,
+    K: ContiguousIx,
+{
+    type Value = S::Value;
 }
 
 impl<S, K> Take<K, S::Value> for SlabPool<S, K>
@@ -440,8 +446,6 @@ where
     S: KeySlot<K>,
     K: ContiguousIx,
 {
-    type Value = S::Value;
-
     #[inline]
     fn delete(&mut self, key: K) {
         let f = if self.free_head < self.pool.len() {
@@ -453,6 +457,14 @@ where
         self.pool[ki].set_key(f);
         self.free_head = ki;
     }
+}
+
+impl<S, K> ObjectPool<K> for KeySlabPool<S, K>
+where
+    S: KeySlot<K>,
+    K: ContiguousIx,
+{
+    type Value = S::Value;
 }
 
 impl<S, K> Take<K, S::Value> for KeySlabPool<S, K>
