@@ -20,15 +20,29 @@ pub trait ContainerPool<K>: Pool<K> {
 /// A [`Pool`] which allows the insertion of empty elements
 pub trait InsertEmpty<K>: ContainerPool<K> {
     /// Insert an empty container, returning its key
-    /// 
+    ///
     /// Returns an error on allocation failure
+    #[cfg_attr(not(tarpaulin), inline(always))]
     #[must_use]
-    fn insert_empty(&mut self) -> Result<K, ()>;
+    fn insert_empty(&mut self) -> Result<K, ()> {
+        self.insert_empty_with_capacity(0)
+    }
+
+    /// Allocate a new, empty stack with the given capacity
+    ///
+    /// Note that the capacity is *not* guaranteed, and may have a different definition depending on the pool/container type.
+    ///
+    /// Return an error on failure
+    ///
+    /// Leaves the pool in an unspecified state and returns an unspecified value or panics if used on an unrecognized key
+    #[must_use]
+    fn insert_empty_with_capacity(&mut self, capacity: usize) -> Result<K, ()>;
+
     /// Insert an empty container, returning a unique key
-    /// 
+    ///
     /// This means that the returned key is guaranteed to compare disequal to that of any other container which have not been removed.
     /// Behaviour of comparisons with removed keys is unspecified.
-    /// 
+    ///
     /// Returns an error on allocation failure. Allocation always fails if the pool does not support this feature
     #[cfg_attr(not(tarpaulin), inline(always))]
     #[must_use]

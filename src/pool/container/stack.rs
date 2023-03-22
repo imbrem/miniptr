@@ -8,16 +8,6 @@ use super::*;
 
 /// A [`Pool`] allocating stacks containing elements of type `Self::Item`
 pub trait StackPool<K>: ContainerPool<K> + InsertEmpty<K> {
-    /// Allocate a new, empty stack with the given capacity
-    ///
-    /// Note that the capacity is *not* guaranteed.
-    ///
-    /// Return an error on failure
-    ///
-    /// Leaves the pool in an unspecified state and returns an unspecified value or panics if used on an unrecognized key
-    #[must_use]
-    fn new_with_capacity(&mut self, capacity: usize) -> Result<K, ()>;
-
     /// Push an element to a stack
     ///
     /// On success, returns the stack's key, which may have been changed (in this case, the old key should be considered deleted).
@@ -269,8 +259,10 @@ where
     K: Clone,
     P::Value: StackLike,
 {
-    fn insert_empty(&mut self) -> Result<K, ()> {
-        self.new_with_capacity(0)
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn insert_empty_with_capacity(&mut self, capacity: usize) -> Result<K, ()> {
+        let stack = P::Value::new_stack_with_capacity(capacity)?;
+        self.0.try_insert(stack).map_err(|_| ())
     }
 }
 
@@ -280,12 +272,6 @@ where
     K: Clone,
     P::Value: StackLike,
 {
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    fn new_with_capacity(&mut self, capacity: usize) -> Result<K, ()> {
-        let stack = P::Value::new_stack_with_capacity(capacity)?;
-        self.0.try_insert(stack).map_err(|_| ())
-    }
-
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn try_into_popped(&mut self, key: K) -> Result<Option<(K, Self::Elem)>, ()> {
         Ok(self.0.get_mut(key.clone()).pop_stack().map(|v| (key, v)))
