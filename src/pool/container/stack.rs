@@ -2,6 +2,8 @@
 Traits for containers implementing stacks
 */
 
+use std::collections::VecDeque;
+
 use crate::forward_pool_traits;
 
 use super::*;
@@ -228,6 +230,46 @@ impl<V> StackLike for Vec<V> {
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn try_push_stack(&mut self, item: Self::Elem) -> Result<(), Self::Elem> {
         self.push(item);
+        Ok(())
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn stack_capacity(&self) -> usize {
+        self.capacity()
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn clear_stack(&mut self) {
+        self.clear()
+    }
+}
+
+impl<V> ContainerLike for VecDeque<V> {
+    type Elem = V;
+}
+
+impl<V> StackLike for VecDeque<V> {
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn new_stack_with_capacity(capacity: usize) -> Result<Self, ()>
+    where
+        Self: Sized,
+    {
+        Ok(VecDeque::with_capacity(capacity))
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn push_stack(&mut self, item: Self::Elem) {
+        self.push_back(item)
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn pop_stack(&mut self) -> Option<Self::Elem> {
+        self.pop_back()
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_push_stack(&mut self, item: Self::Elem) -> Result<(), Self::Elem> {
+        self.push_back(item);
         Ok(())
     }
 
