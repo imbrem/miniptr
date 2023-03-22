@@ -133,7 +133,7 @@ pub trait RemovePool<K>: ObjectPool<K> + Take<K, Self::Value> {
 impl<P, K> RemovePool<K> for P where P: ObjectPool<K> + Take<K, Self::Value> {}
 
 /// A pool providing read-only access to values of type `V` given a key of type `K`
-pub trait GetRef<K, V> {
+pub trait GetRef<K, V: ?Sized> {
     /// Try to get a reference to the value associated with a given key
     ///
     /// May return an arbitrary value if provided an unrecognized key.
@@ -151,7 +151,7 @@ pub trait GetRef<K, V> {
 }
 
 /// An pool providing mutable access to values given a key of type `K`
-pub trait GetMut<K, V> {
+pub trait GetMut<K, V: ?Sized> {
     /// Try to get a reference to the value associated with a given key
     ///
     /// May return an arbitrary value if provided an unrecognized key.
@@ -445,7 +445,7 @@ macro_rules! forward_pool_traits {
             }
         }
 
-        impl<$($gen,)* K, V> GetRef<K, V> for $ty
+        impl<$($gen,)* K, V: ?Sized> GetRef<K, V> for $ty
         where
             $P: GetRef<K, V>,
         {
@@ -460,7 +460,7 @@ macro_rules! forward_pool_traits {
             }
         }
 
-        impl<$($gen,)* K, V> GetMut<K, V> for $ty
+        impl<$($gen,)* K, V: ?Sized> GetMut<K, V> for $ty
         where
             $P: GetMut<K, V>,
         {
