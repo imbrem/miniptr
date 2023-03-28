@@ -150,19 +150,8 @@ pub trait StackPool<K>: ContainerPool<K> + InsertEmpty<K> {
     fn clear_pinned(&mut self, key: K) -> Result<(), ()>;
 }
 
-/// A [`ContainerPool`] implementation which just wraps a pool of [`ContainerLike`]s
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Default, TransparentWrapper)]
-#[repr(transparent)]
-pub struct ContainerLikePool<P>(pub P);
-
-/// A trait implemented by things which contain elements of type `Self::Elem`
-pub trait ContainerLike {
-    /// The type of items contained in this container
-    type Elem;
-}
-
 /// A trait implemented by things which can be pushed to and popped to like a stack
-pub trait StackLike: ContainerLike + Default {
+pub trait StackLike: Container + Default {
     /// Allocate a new, empty stack with the given capacity
     ///
     /// Note that the capacity is *not* guaranteed.
@@ -204,10 +193,6 @@ pub trait StackLike: ContainerLike + Default {
     fn clear_stack(&mut self);
 }
 
-impl<V> ContainerLike for Vec<V> {
-    type Elem = V;
-}
-
 impl<V> StackLike for Vec<V> {
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn new_stack_with_capacity(capacity: usize) -> Result<Self, ()>
@@ -242,10 +227,6 @@ impl<V> StackLike for Vec<V> {
     fn clear_stack(&mut self) {
         self.clear()
     }
-}
-
-impl<V> ContainerLike for VecDeque<V> {
-    type Elem = V;
 }
 
 impl<V> StackLike for VecDeque<V> {
@@ -292,7 +273,7 @@ where
     K: Clone,
     P::Value: StackLike,
 {
-    type Elem = <P::Value as ContainerLike>::Elem;
+    type Elem = <P::Value as Container>::Elem;
 }
 
 impl<P, K> InsertEmpty<K> for ContainerLikePool<P>

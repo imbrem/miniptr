@@ -1,6 +1,8 @@
 /*!
 Traits for container allocators
 */
+use std::collections::VecDeque;
+
 use super::*;
 
 pub mod array;
@@ -14,6 +16,17 @@ pub mod stack;
 /// A [`Pool`] allocating containers of `Self::Elem`
 pub trait ContainerPool<K>: Pool<K> {
     /// The type of items contained in this list
+    type Elem;
+}
+
+/// A [`ContainerPool`] implementation which just wraps a pool of [`ContainerLike`]s
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Default, TransparentWrapper)]
+#[repr(transparent)]
+pub struct ContainerLikePool<P>(pub P);
+
+/// A trait implemented by things which contain elements of type `Self::Elem`
+pub trait Container {
+    /// The type of items contained in this container
     type Elem;
 }
 
@@ -56,4 +69,12 @@ pub trait LenPool<K>: Pool<K> {
     /// Get the length of the object associated with the key `key`
     #[must_use]
     fn get_len(&self, key: K) -> usize;
+}
+
+impl<V> Container for Vec<V> {
+    type Elem = V;
+}
+
+impl<V> Container for VecDeque<V> {
+    type Elem = V;
 }
