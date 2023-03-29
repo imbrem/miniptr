@@ -149,15 +149,6 @@ pub trait StackPool<K>: ContainerPool<K> {
 
 /// A trait implemented by things which can be pushed to and popped to like a stack
 pub trait StackLike: Container + Default {
-    /// Allocate a new, empty stack with the given capacity
-    ///
-    /// Note that the capacity is *not* guaranteed.
-    ///
-    /// Return an error on failure
-    fn new_stack_with_capacity(capacity: usize) -> Result<Self, ()>
-    where
-        Self: Sized;
-
     /// Push an element to a stack
     ///
     /// Panics if:
@@ -188,78 +179,6 @@ pub trait StackLike: Container + Default {
     ///
     /// In some implementations, the capacity of the input stack will be preserved, but this is *not* guaranteed
     fn clear_stack(&mut self);
-}
-
-impl<V> StackLike for Vec<V> {
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    fn new_stack_with_capacity(capacity: usize) -> Result<Self, ()>
-    where
-        Self: Sized,
-    {
-        Ok(Vec::with_capacity(capacity))
-    }
-
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    fn push_stack(&mut self, item: Self::Elem) {
-        self.push(item)
-    }
-
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    fn pop_stack(&mut self) -> Option<Self::Elem> {
-        self.pop()
-    }
-
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_push_stack(&mut self, item: Self::Elem) -> Result<(), Self::Elem> {
-        self.push(item);
-        Ok(())
-    }
-
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    fn stack_capacity(&self) -> usize {
-        self.capacity()
-    }
-
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    fn clear_stack(&mut self) {
-        self.clear()
-    }
-}
-
-impl<V> StackLike for VecDeque<V> {
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    fn new_stack_with_capacity(capacity: usize) -> Result<Self, ()>
-    where
-        Self: Sized,
-    {
-        Ok(VecDeque::with_capacity(capacity))
-    }
-
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    fn push_stack(&mut self, item: Self::Elem) {
-        self.push_back(item)
-    }
-
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    fn pop_stack(&mut self) -> Option<Self::Elem> {
-        self.pop_back()
-    }
-
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_push_stack(&mut self, item: Self::Elem) -> Result<(), Self::Elem> {
-        self.push_back(item);
-        Ok(())
-    }
-
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    fn stack_capacity(&self) -> usize {
-        self.capacity()
-    }
-
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    fn clear_stack(&mut self) {
-        self.clear()
-    }
 }
 
 impl<P, K> StackPool<K> for P
@@ -303,5 +222,154 @@ where
     fn clear_pinned(&mut self, key: K) -> Result<(), ()> {
         self.get_mut(key.clone()).clear_stack();
         Ok(())
+    }
+}
+
+impl<V> StackLike for Vec<V> {
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn push_stack(&mut self, item: Self::Elem) {
+        self.push(item)
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn pop_stack(&mut self) -> Option<Self::Elem> {
+        self.pop()
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_push_stack(&mut self, item: Self::Elem) -> Result<(), Self::Elem> {
+        self.push(item);
+        Ok(())
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn stack_capacity(&self) -> usize {
+        self.capacity()
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn clear_stack(&mut self) {
+        self.clear()
+    }
+}
+
+impl<V> StackLike for VecDeque<V> {
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn push_stack(&mut self, item: Self::Elem) {
+        self.push_back(item)
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn pop_stack(&mut self) -> Option<Self::Elem> {
+        self.pop_back()
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_push_stack(&mut self, item: Self::Elem) -> Result<(), Self::Elem> {
+        self.push_back(item);
+        Ok(())
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn stack_capacity(&self) -> usize {
+        self.capacity()
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn clear_stack(&mut self) {
+        self.clear()
+    }
+}
+
+#[cfg(feature = "smallvec")]
+impl<A> StackLike for smallvec::SmallVec<A>
+where
+    A: smallvec::Array,
+{
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn push_stack(&mut self, item: Self::Elem) {
+        self.push(item)
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn pop_stack(&mut self) -> Option<Self::Elem> {
+        self.pop()
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_push_stack(&mut self, item: Self::Elem) -> Result<(), Self::Elem> {
+        self.push(item);
+        Ok(())
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn stack_capacity(&self) -> usize {
+        self.capacity()
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn clear_stack(&mut self) {
+        self.clear()
+    }
+}
+
+#[cfg(feature = "arrayvec")]
+impl<V, const N: usize> StackLike for arrayvec::ArrayVec<V, N> {
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn push_stack(&mut self, item: Self::Elem) {
+        self.push(item)
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn pop_stack(&mut self) -> Option<Self::Elem> {
+        self.pop()
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_push_stack(&mut self, item: Self::Elem) -> Result<(), Self::Elem> {
+        self.push(item);
+        Ok(())
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn stack_capacity(&self) -> usize {
+        self.capacity()
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn clear_stack(&mut self) {
+        self.clear()
+    }
+}
+
+#[cfg(feature = "ecow")]
+impl<V> StackLike for ecow::EcoVec<V>
+where
+    V: Clone,
+{
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn push_stack(&mut self, item: Self::Elem) {
+        self.push(item)
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn pop_stack(&mut self) -> Option<Self::Elem> {
+        self.pop()
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_push_stack(&mut self, item: Self::Elem) -> Result<(), Self::Elem> {
+        self.push(item);
+        Ok(())
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn stack_capacity(&self) -> usize {
+        self.capacity()
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn clear_stack(&mut self) {
+        self.clear()
     }
 }

@@ -35,26 +35,13 @@ pub trait Container {
 
 /// A [`Pool`] which allows the insertion of empty elements
 pub trait InsertEmpty<K>: ContainerPool<K> {
-    /// Insert an empty container, returning its key
+    /// Allocate an empty container, returning its key
     ///
     /// Returns an error on allocation failure
-    #[cfg_attr(not(tarpaulin), inline(always))]
     #[must_use]
-    fn insert_empty(&mut self) -> Result<K, ()> {
-        self.insert_empty_with_capacity(0)
-    }
+    fn insert_empty(&mut self) -> Result<K, ()>;
 
-    /// Allocate a new, empty stack with the given capacity
-    ///
-    /// Note that the capacity is *not* guaranteed, and may have a different definition depending on the pool/container type.
-    ///
-    /// Return an error on failure
-    ///
-    /// Leaves the pool in an unspecified state and returns an unspecified value or panics if used on an unrecognized key
-    #[must_use]
-    fn insert_empty_with_capacity(&mut self, capacity: usize) -> Result<K, ()>;
-
-    /// Insert an empty container, returning a unique key
+    /// Allocate an empty container, returning a unique key
     ///
     /// This means that the returned key is guaranteed to compare disequal to that of any other container which have not been removed.
     /// Behaviour of comparisons with removed keys is unspecified.
@@ -65,6 +52,36 @@ pub trait InsertEmpty<K>: ContainerPool<K> {
     fn insert_unique_empty(&mut self) -> Result<K, ()> {
         Err(())
     }
+}
+
+/// A [`Pool`] which allows the insertion of empty elements with a given capacity
+pub trait InsertWithCapacity<K, C = usize>: ContainerPool<K> {
+    /// Allocate an empty container with the given capacity
+    ///
+    /// Note that the capacity is *not* guaranteed, and may have a different definition depending on the pool/container type.
+    ///
+    /// Return an error on failure
+    ///
+    /// Leaves the pool in an unspecified state and returns an unspecified value or panics if used on an unrecognized key
+    #[must_use]
+    fn insert_with_capacity(&mut self, capacity: C) -> Result<K, ()>;
+
+    /// Allocate an empty container with the given capacity, returning a unique key
+    ///
+    /// This means that the returned key is guaranteed to compare disequal to that of any other container which have not been removed.
+    /// Behaviour of comparisons with removed keys is unspecified.
+    ///
+    /// Returns an error on allocation failure. Allocation always fails if the pool does not support this feature
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    #[must_use]
+    fn insert_unique_with_capacity(&mut self, _capacity: C) -> Result<K, ()> {
+        Err(())
+    }
+}
+
+/// An object which can be created with a given capacity
+pub trait WithCapacity<C = usize> {
+    fn new_with_capacity(capacity: C) -> Self;
 }
 
 /// A [`Pool`] which associates keys `K` with a length
@@ -78,6 +95,55 @@ impl<V> Container for Vec<V> {
     type Elem = V;
 }
 
+impl<V> Container for [V] {
+    type Elem = V;
+}
+
+impl<V, const N: usize> Container for [V; N] {
+    type Elem = V;
+}
+
 impl<V> Container for VecDeque<V> {
     type Elem = V;
+}
+
+#[cfg(feature = "smallvec")]
+impl<A: smallvec::Array> Container for smallvec::SmallVec<A> {
+    type Elem = A::Item;
+}
+
+#[cfg(feature = "arrayvec")]
+impl<V, const N: usize> Container for arrayvec::ArrayVec<V, N> {
+    type Elem = V;
+}
+
+#[cfg(feature = "ecow")]
+impl<V> Container for ecow::EcoVec<V> {
+    type Elem = V;
+}
+
+impl<V> WithCapacity for Vec<V> {
+    fn new_with_capacity(capacity: usize) -> Self {
+        Vec::with_capacity(capacity)
+    }
+}
+
+impl<V> WithCapacity for VecDeque<V> {
+    fn new_with_capacity(capacity: usize) -> Self {
+        VecDeque::with_capacity(capacity)
+    }
+}
+
+#[cfg(feature = "smallvec")]
+impl<A: smallvec::Array> WithCapacity for smallvec::SmallVec<A> {
+    fn new_with_capacity(capacity: usize) -> Self {
+        smallvec::SmallVec::with_capacity(capacity)
+    }
+}
+
+#[cfg(feature = "ecow")]
+impl<V> WithCapacity for ecow::EcoVec<V> {
+    fn new_with_capacity(capacity: usize) -> Self {
+        ecow::EcoVec::with_capacity(capacity)
+    }
 }

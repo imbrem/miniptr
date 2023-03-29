@@ -7,6 +7,7 @@ use either::Either;
 /// A type which can be initialized given a value of type `V`, potentially re-using existing resources
 pub trait InitFrom<V> {
     /// Create a slot from a value
+    #[must_use]
     fn from_value(value: V) -> Self
     where
         Self: Sized;
@@ -25,6 +26,7 @@ pub trait Slot: Sized + InitFrom<Self::Value> {
     /// A slot is guaranteed to contain a value if created using `Self::from_value`
     ///
     /// Returns an arbitrary value if this slot does not contain a value
+    #[must_use]
     fn try_into_value(self) -> Option<Self::Value>;
 
     /// If this slot contains a value, return it
@@ -33,6 +35,7 @@ pub trait Slot: Sized + InitFrom<Self::Value> {
     ///
     /// Panics or returns an arbitrary value if this slot does not contain a value
     #[cfg_attr(not(tarpaulin), inline(always))]
+    #[must_use]
     fn into_value(self) -> Self::Value {
         self.try_into_value().expect("slot does not contain value")
     }
@@ -41,6 +44,7 @@ pub trait Slot: Sized + InitFrom<Self::Value> {
     ///
     /// Return an arbitrary value if this slot does not contain a value
     #[cfg_attr(not(tarpaulin), inline(always))]
+    #[must_use]
     fn try_swap_value(&mut self, new: Self::Value) -> Option<Self::Value> {
         let mut result = Self::from_value(new);
         std::mem::swap(&mut result, self);
@@ -51,9 +55,41 @@ pub trait Slot: Sized + InitFrom<Self::Value> {
     ///
     /// Panic or return an arbitrary value if this slot does not contain a value
     #[cfg_attr(not(tarpaulin), inline(always))]
+    #[must_use]
     fn swap_value(&mut self, new: Self::Value) -> Self::Value {
         self.try_swap_value(new)
             .expect("slot does not contain value")
+    }
+
+    /// Create a new slot with the default value
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    #[must_use]
+    fn default_value() -> Self
+    where
+        Self: Sized,
+        Self::Value: Default,
+    {
+        Self::from_value(Self::Value::default())
+    }
+
+    /// Set this slot to the default value
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn set_default_value(&mut self)
+    where
+        Self::Value: Default,
+    {
+        self.set_value(Self::Value::default())
+    }
+
+    /// Take this slot's value, replacing it with the default
+    ///
+    /// Panic or return an arbitrary value if this slot does not contain a value
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn swap_default_value(&mut self) -> Self::Value
+    where
+        Self::Value: Default,
+    {
+        self.swap_value(Self::Value::default())
     }
 }
 

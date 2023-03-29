@@ -53,7 +53,7 @@ impl<P, K> SlicePool<K> for P where P: SliceRefPool<K> + SliceMutPool<K> {}
 pub trait ArrayListPool<K>: ArrayPool<K> + StackPool<K> {}
 impl<P, K> ArrayListPool<K> for P where P: ArrayPool<K> + StackPool<K> {}
 
-/// A pool containing `Vec`s: growable arrays allocated in a contiguous slice
+/// A pool containing growable arrays allocated in a contiguous slice
 ///
 /// Automatically implemented for any [`Pool`] implementing [`SlicePool`] and [`StackPool`].
 pub trait VecPool<K>: SlicePool<K> + StackPool<K> {}
