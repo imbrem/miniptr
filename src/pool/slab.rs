@@ -204,7 +204,7 @@ where
     S: RemoveSlot,
     K: ContiguousIx,
 {
-    type Value = S::Value;
+    type Object = S::Value;
 }
 
 impl<S, K> Take<K, S::Value> for SlabPool<S, K>
@@ -464,7 +464,7 @@ where
     S: KeySlot<K>,
     K: ContiguousIx,
 {
-    type Value = S::Value;
+    type Object = S::Value;
 }
 
 impl<S, K> Take<K, S::Value> for KeySlabPool<S, K>

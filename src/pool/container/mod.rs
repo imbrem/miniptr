@@ -19,10 +19,13 @@ pub trait ContainerPool<K>: Pool<K> {
     type Elem;
 }
 
-/// A [`ContainerPool`] implementation which just wraps a pool of [`ContainerLike`]s
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Default, TransparentWrapper)]
-#[repr(transparent)]
-pub struct ContainerLikePool<P>(pub P);
+impl<P, K> ContainerPool<K> for P
+where
+    P: ObjectPool<K>,
+    P::Object: Container,
+{
+    type Elem = <P::Object as Container>::Elem;
+}
 
 /// A trait implemented by things which contain elements of type `Self::Elem`
 pub trait Container {

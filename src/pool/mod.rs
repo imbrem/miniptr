@@ -51,12 +51,12 @@ pub trait Pool<K> {
 // A pool mapping keys of type `K` to values of type `V`
 pub trait ObjectPool<K>: Pool<K> {
     /// The value type stored by this pool
-    type Value;
+    type Object;
 }
 
 /// A pool supporting insertion of objects, yielding keys
-pub trait InsertPool<K>: ObjectPool<K> + Insert<K, Self::Value> {}
-impl<K, P> InsertPool<K> for P where P: ObjectPool<K> + Insert<K, Self::Value> {}
+pub trait InsertPool<K>: ObjectPool<K> + Insert<K, Self::Object> {}
+impl<K, P> InsertPool<K> for P where P: ObjectPool<K> + Insert<K, Self::Object> {}
 
 /// A [`Pool`] for which `Pool::delete` may be called multiple times on the same key without modifying any other key; panicking is allowed.
 ///
@@ -97,7 +97,7 @@ pub trait Take<K, V> {
 }
 
 /// A [`Pool`] supporting the removal of keys
-pub trait RemovePool<K>: ObjectPool<K> + Take<K, Self::Value> {
+pub trait RemovePool<K>: ObjectPool<K> + Take<K, Self::Object> {
     /// Deletes the key `k` from the mapping, returning its value.
     ///
     /// Guaranteed to have the same behaviour as [`Take<K, Self::Value`]'s `try_take` method,
@@ -108,7 +108,7 @@ pub trait RemovePool<K>: ObjectPool<K> + Take<K, Self::Value> {
     /// - Has already been deleted
     #[cfg_attr(not(tarpaulin), inline(always))]
     #[must_use]
-    fn try_remove(&mut self, key: K) -> Option<Self::Value> {
+    fn try_remove(&mut self, key: K) -> Option<Self::Object> {
         self.try_take(key)
     }
 
@@ -122,15 +122,15 @@ pub trait RemovePool<K>: ObjectPool<K> + Take<K, Self::Value> {
     /// - Has already been deleted
     #[cfg_attr(not(tarpaulin), inline(always))]
     #[must_use]
-    fn remove(&mut self, key: K) -> Self::Value
+    fn remove(&mut self, key: K) -> Self::Object
     where
-        Self::Value: Sized,
+        Self::Object: Sized,
     {
         self.take(key)
     }
 }
 
-impl<P, K> RemovePool<K> for P where P: ObjectPool<K> + Take<K, Self::Value> {}
+impl<P, K> RemovePool<K> for P where P: ObjectPool<K> + Take<K, Self::Object> {}
 
 /// A pool providing read-only access to values of type `V` given a key of type `K`
 pub trait GetRef<K, V: ?Sized> {
@@ -174,13 +174,13 @@ pub trait GetMut<K, V: ?Sized> {
 /// Automatically implemented for any [`Pool`] which implements [`GetRef<K, Self::Value>`].
 ///
 /// Provides wrappers around [`GetRef`] methods returning `&Self::Value`, which might be useful for type inference.
-pub trait PoolRef<K>: ObjectPool<K> + GetRef<K, Self::Value> {
+pub trait PoolRef<K>: ObjectPool<K> + GetRef<K, Self::Object> {
     /// Try to get a reference to the value associated with a given key
     ///
     /// May return an arbitrary value if provided an unrecognized key.
     #[cfg_attr(not(tarpaulin), inline(always))]
     #[must_use]
-    fn try_get_value(&self, key: K) -> Option<&Self::Value> {
+    fn try_get_value(&self, key: K) -> Option<&Self::Object> {
         self.try_get(key)
     }
 
@@ -189,24 +189,24 @@ pub trait PoolRef<K>: ObjectPool<K> + GetRef<K, Self::Value> {
     /// May panic or return an arbitrary value if provided an unrecognized key.
     #[cfg_attr(not(tarpaulin), inline(always))]
     #[must_use]
-    fn get_value(&self, key: K) -> &Self::Value {
+    fn get_value(&self, key: K) -> &Self::Object {
         self.get(key)
     }
 }
-impl<P, K> PoolRef<K> for P where P: ObjectPool<K> + GetRef<K, Self::Value> {}
+impl<P, K> PoolRef<K> for P where P: ObjectPool<K> + GetRef<K, Self::Object> {}
 
 /// An [`Pool`] providing mutable access to values
 ///
 /// Automatically implemented for any [`Pool`] which implements [`GetMut<K, Self::Value>`].
 ///
 /// Provides wrappers around [`GetMut`] methods returning `&mut Self::Value`, which might be useful for type inference.
-pub trait PoolMut<K>: ObjectPool<K> + GetMut<K, Self::Value> {
+pub trait PoolMut<K>: ObjectPool<K> + GetMut<K, Self::Object> {
     /// Try to get a reference to the value associated with a given key
     ///
     /// May return an arbitrary value if provided an unrecognized key.
     #[cfg_attr(not(tarpaulin), inline(always))]
     #[must_use]
-    fn try_get_value_mut(&mut self, key: K) -> Option<&mut Self::Value> {
+    fn try_get_value_mut(&mut self, key: K) -> Option<&mut Self::Object> {
         self.try_get_mut(key)
     }
 
@@ -215,11 +215,11 @@ pub trait PoolMut<K>: ObjectPool<K> + GetMut<K, Self::Value> {
     /// May panic or return an arbitrary value if provided an unrecognized key.
     #[cfg_attr(not(tarpaulin), inline(always))]
     #[must_use]
-    fn get_value_mut(&mut self, key: K) -> &mut Self::Value {
+    fn get_value_mut(&mut self, key: K) -> &mut Self::Object {
         self.get_mut(key)
     }
 }
-impl<P, K> PoolMut<K> for P where P: ObjectPool<K> + GetMut<K, Self::Value> {}
+impl<P, K> PoolMut<K> for P where P: ObjectPool<K> + GetMut<K, Self::Object> {}
 
 /// A [`Pool`] which does not contain any values, and is always full
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Default, Zeroable)]
@@ -240,7 +240,7 @@ impl<K, V> Pool<K> for EmptyPool<V> {
 }
 
 impl<K, V> ObjectPool<K> for EmptyPool<V> {
-    type Value = V;
+    type Object = V;
 }
 
 impl<K, V> SafeFreePool<K> for EmptyPool<V> {}
@@ -324,7 +324,7 @@ impl<K, V> ObjectPool<K> for Arena<Vec<V>, K, ByClone>
 where
     K: ContiguousIx,
 {
-    type Value = V;
+    type Object = V;
 }
 
 impl<K, V> Pool<K> for Arena<Vec<V>, K, ByDefault>
@@ -345,7 +345,7 @@ where
     K: ContiguousIx,
     V: Default,
 {
-    type Value = V;
+    type Object = V;
 }
 
 impl<K, V> SafeFreePool<K> for Arena<Vec<V>, K, ByClone> where K: ContiguousIx {}
@@ -432,7 +432,7 @@ macro_rules! forward_pool_traits {
         where
             $P: ObjectPool<K>,
         {
-            type Value = P::Value;
+            type Object = P::Object;
         }
 
         impl<$($gen,)* K, V> Insert<K, V> for $ty

@@ -2,14 +2,11 @@
 Traits for containers implementing stacks
 */
 
+use super::*;
 use std::collections::VecDeque;
 
-use crate::forward_pool_traits;
-
-use super::*;
-
 /// A [`Pool`] allocating stacks containing elements of type `Self::Item`
-pub trait StackPool<K>: ContainerPool<K> + InsertEmpty<K> {
+pub trait StackPool<K>: ContainerPool<K> {
     /// Push an element to a stack
     ///
     /// On success, returns the stack's key, which may have been changed (in this case, the old key should be considered deleted).
@@ -265,73 +262,46 @@ impl<V> StackLike for VecDeque<V> {
     }
 }
 
-forward_pool_traits!(<P> ContainerLikePool<P> => P);
-
-impl<P, K> ContainerPool<K> for ContainerLikePool<P>
+impl<P, K> StackPool<K> for P
 where
     P: InsertPool<K> + PoolMut<K> + PoolRef<K>,
     K: Clone,
-    P::Value: StackLike,
-{
-    type Elem = <P::Value as Container>::Elem;
-}
-
-impl<P, K> InsertEmpty<K> for ContainerLikePool<P>
-where
-    P: InsertPool<K> + PoolMut<K> + PoolRef<K>,
-    K: Clone,
-    P::Value: StackLike,
-{
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    fn insert_empty_with_capacity(&mut self, capacity: usize) -> Result<K, ()> {
-        let stack = P::Value::new_stack_with_capacity(capacity)?;
-        self.0.try_insert(stack).map_err(|_| ())
-    }
-}
-
-impl<P, K> StackPool<K> for ContainerLikePool<P>
-where
-    P: InsertPool<K> + PoolMut<K> + PoolRef<K>,
-    K: Clone,
-    P::Value: StackLike,
+    P::Object: StackLike,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn try_into_popped(&mut self, key: K) -> Result<Option<(K, Self::Elem)>, ()> {
-        Ok(self.0.get_mut(key.clone()).pop_stack().map(|v| (key, v)))
+        Ok(self.get_mut(key.clone()).pop_stack().map(|v| (key, v)))
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn try_into_pushed(&mut self, key: K, item: Self::Elem) -> Result<K, Self::Elem> {
-        self.0
-            .get_mut(key.clone())
-            .try_push_stack(item)
-            .map(|_| key)
+        self.get_mut(key.clone()).try_push_stack(item).map(|_| key)
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn try_pop(&mut self, key: K) -> Result<Option<Self::Elem>, ()> {
-        Ok(self.0.get_mut(key).pop_stack())
+        Ok(self.get_mut(key).pop_stack())
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn try_push(&mut self, key: K, item: Self::Elem) -> Result<(), Self::Elem> {
-        self.0.get_mut(key).try_push_stack(item)
+        self.get_mut(key).try_push_stack(item)
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn capacity(&self, key: K) -> usize {
-        self.0.get(key).stack_capacity()
+        self.get(key).stack_capacity()
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn clear(&mut self, key: K) -> K {
-        self.0.get_mut(key.clone()).clear_stack();
+        self.get_mut(key.clone()).clear_stack();
         key
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn clear_pinned(&mut self, key: K) -> Result<(), ()> {
-        self.0.get_mut(key.clone()).clear_stack();
+        self.get_mut(key.clone()).clear_stack();
         Ok(())
     }
 }

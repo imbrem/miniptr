@@ -2,7 +2,10 @@
 Traits for map-like containers
 */
 
-use crate::index::ContiguousIx;
+use crate::{
+    index::ContiguousIx,
+    pool::{PoolMut, PoolRef},
+};
 
 /// Given a key `K` an index `I`, get a reference to the associated value `V`
 pub trait GetIndex<K, I, V> {
@@ -37,6 +40,38 @@ pub trait GetElem<K, V> {
     }
 }
 
+impl<P, K, I, V> GetIndex<K, I, V> for P
+where
+    P: PoolRef<K>,
+    P::Object: GetElem<I, V> + 'static, //TODO: relax this?
+{
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn get_index(&self, key: K, elem: I) -> Option<&V> {
+        self.try_get_value(key)?.get_elem(elem)
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn get_index_unchecked(&self, key: K, elem: I) -> Option<&V> {
+        self.get_value(key).get_elem_unchecked(elem)
+    }
+}
+
+impl<P, K, I, V> GetIndexMut<K, I, V> for P
+where
+    P: PoolMut<K>,
+    P::Object: GetElemMut<I, V> + 'static, //TODO: relax this?
+{
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn get_index_mut(&mut self, key: K, elem: I) -> Option<&mut V> {
+        self.try_get_value_mut(key)?.get_elem_mut(elem)
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn get_index_mut_unchecked(&mut self, key: K, elem: I) -> Option<&mut V> {
+        self.get_value_mut(key).get_elem_mut_unchecked(elem)
+    }
+}
+
 /// Given a key `K` get a mutable reference to the associated element `V`
 pub trait GetElemMut<K, V> {
     #[must_use]
@@ -48,14 +83,20 @@ pub trait GetElemMut<K, V> {
     }
 }
 
-impl<K, V> GetElem<K, V> for [V] where K: ContiguousIx {
+impl<K, V> GetElem<K, V> for [V]
+where
+    K: ContiguousIx,
+{
     #[inline(always)]
     fn get_elem(&self, key: K) -> Option<&V> {
         self.get(key.index())
     }
 }
 
-impl<K, V> GetElemMut<K, V> for [V] where K: ContiguousIx {
+impl<K, V> GetElemMut<K, V> for [V]
+where
+    K: ContiguousIx,
+{
     #[inline(always)]
     fn get_elem_mut(&mut self, key: K) -> Option<&mut V> {
         self.get_mut(key.index())
