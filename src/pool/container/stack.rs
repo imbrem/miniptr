@@ -125,7 +125,7 @@ pub trait StackPool<K>: ContainerPool<K> {
     /// Returns an unspecified value or panics if used on an unrecognized key.
     #[cfg_attr(not(tarpaulin), inline(always))]
     #[must_use]
-    fn capacity(&self, _key: K) -> usize {
+    fn key_capacity(&self, _key: K) -> usize {
         0
     }
 
@@ -134,7 +134,7 @@ pub trait StackPool<K>: ContainerPool<K> {
     /// In some implementations, the returned key will preserve the capacity of the input stack, but this is *not* guaranteed.
     ///
     /// Leaves the pool in an unspecified state and returns an unspecified value or panics if used on an unrecognized key
-    fn clear(&mut self, key: K) -> K;
+    fn cleared_key(&mut self, key: K) -> K;
 
     /// Try to clear the provided stack without moving it
     ///
@@ -144,7 +144,7 @@ pub trait StackPool<K>: ContainerPool<K> {
     /// In some implementations, the capacity of the input stack will be preserved, but this is *not* guaranteed.
     ///
     /// Leaves the pool in an unspecified state and returns an unspecified value or panics if used on an unrecognized key
-    fn clear_pinned(&mut self, key: K) -> Result<(), ()>;
+    fn clear_key(&mut self, key: K) -> Result<(), ()>;
 }
 
 /// A trait implemented by things which can be pushed to and popped to like a stack
@@ -189,38 +189,38 @@ where
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn try_into_popped(&mut self, key: K) -> Result<Option<(K, Self::Elem)>, ()> {
-        Ok(self.get_mut(key.clone()).pop_stack().map(|v| (key, v)))
+        Ok(self.at_mut(key.clone()).pop_stack().map(|v| (key, v)))
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn try_into_pushed(&mut self, key: K, item: Self::Elem) -> Result<K, Self::Elem> {
-        self.get_mut(key.clone()).try_push_stack(item).map(|_| key)
+        self.at_mut(key.clone()).try_push_stack(item).map(|_| key)
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn try_pop(&mut self, key: K) -> Result<Option<Self::Elem>, ()> {
-        Ok(self.get_mut(key).pop_stack())
+        Ok(self.at_mut(key).pop_stack())
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn try_push(&mut self, key: K, item: Self::Elem) -> Result<(), Self::Elem> {
-        self.get_mut(key).try_push_stack(item)
+        self.at_mut(key).try_push_stack(item)
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn capacity(&self, key: K) -> usize {
-        self.get(key).stack_capacity()
+    fn key_capacity(&self, key: K) -> usize {
+        self.at(key).stack_capacity()
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn clear(&mut self, key: K) -> K {
-        self.get_mut(key.clone()).clear_stack();
+    fn cleared_key(&mut self, key: K) -> K {
+        self.at_mut(key.clone()).clear_stack();
         key
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn clear_pinned(&mut self, key: K) -> Result<(), ()> {
-        self.get_mut(key.clone()).clear_stack();
+    fn clear_key(&mut self, key: K) -> Result<(), ()> {
+        self.at_mut(key.clone()).clear_stack();
         Ok(())
     }
 }
@@ -371,5 +371,72 @@ where
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn clear_stack(&mut self) {
         self.clear()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    fn vec_like_test(
+        stack: &mut (impl Container<Elem = u32>
+                  + StackLike
+                  + IsEmpty
+                  + HasLen
+                  + GetRef<usize, u32>
+                  + GetMut<usize, u32>),
+    ) {
+        assert!(stack.is_empty());
+        assert_eq!(stack.len(), 0);
+        stack.push_stack(4);
+        assert!(!stack.is_empty());
+        assert_eq!(stack.len(), 1);
+        stack.push_stack(3);
+        stack.push_stack(2);
+        assert_eq!(stack.len(), 3);
+        assert_eq!(stack.pop_stack(), Some(2));
+        assert_eq!(stack.len(), 2);
+        assert_eq!(stack.pop_stack(), Some(3));
+        stack.push_stack(7);
+        stack.push_stack(8);
+        assert_eq!(stack.pop_stack(), Some(8));
+        assert_eq!(stack.pop_stack(), Some(7));
+        assert_eq!(stack.pop_stack(), Some(4));
+        assert!(stack.is_empty());
+        assert_eq!(stack.pop_stack(), None);
+        assert!(stack.is_empty());
+        stack.push_stack(3);
+        stack.push_stack(2);
+        assert_eq!(stack.pop_stack(), Some(2));
+        assert!(!stack.is_empty());
+        stack.clear_stack();
+        assert!(stack.is_empty());
+        assert_eq!(stack.pop_stack(), None);
+        assert_eq!(stack.pop_stack(), None);
+        stack.clear_stack();
+        assert_eq!(stack.pop_stack(), None);
+        assert!(stack.is_empty());
+        assert_eq!(stack.try_push_stack(8), Ok(()));
+        assert!(!stack.is_empty());
+        let _ = stack.stack_capacity();
+
+        assert_eq!(stack.at(0), &8);
+        assert_eq!(stack.at_mut(0), &mut 8);
+        assert_eq!(stack.try_at(0), Some(&8));
+        assert_eq!(stack.try_at_mut(0), Some(&mut 8));
+        assert_eq!(stack.try_at(1), None);
+        assert_eq!(stack.try_at_mut(1), None);
+    }
+
+    #[test]
+    fn default_stack_like() {
+        vec_like_test(&mut Vec::new_with_capacity(12));
+        vec_like_test(&mut VecDeque::new_with_capacity(34));
+        #[cfg(feature = "smallvec")]
+        vec_like_test(&mut smallvec::SmallVec::<[u32; 2]>::new_with_capacity(6));
+        #[cfg(feature = "arrayvec")]
+        vec_like_test(&mut arrayvec::ArrayVec::<u32, 10>::new());
+        #[cfg(feature = "ecow")]
+        vec_like_test(&mut ecow::EcoVec::new_with_capacity(4));
     }
 }

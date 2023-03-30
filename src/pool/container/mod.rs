@@ -33,13 +33,22 @@ pub trait Container {
     type Elem;
 }
 
-/// A [`Pool`] which allows the insertion of empty elements
-pub trait InsertEmpty<K>: ContainerPool<K> {
+/// A pool which allows the insertion of empty elements
+pub trait InsertEmpty<K> {
+    /// Allocate an empty container, returning its key
+    ///
+    /// Panics on allocation failure
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    #[must_use]
+    fn insert_empty(&mut self) -> K {
+        self.try_insert_empty().unwrap()
+    }
+
     /// Allocate an empty container, returning its key
     ///
     /// Returns an error on allocation failure
     #[must_use]
-    fn insert_empty(&mut self) -> Result<K, ()>;
+    fn try_insert_empty(&mut self) -> Result<K, ()>;
 
     /// Allocate an empty container, returning a unique key
     ///
@@ -54,17 +63,22 @@ pub trait InsertEmpty<K>: ContainerPool<K> {
     }
 }
 
-/// A [`Pool`] which allows the insertion of empty elements with a given capacity
-pub trait InsertWithCapacity<K, C = usize>: ContainerPool<K> {
+/// A pool which allows the insertion of empty elements with a given capacity
+pub trait InsertWithCapacity<K, C = usize> {
     /// Allocate an empty container with the given capacity
     ///
-    /// Note that the capacity is *not* guaranteed, and may have a different definition depending on the pool/container type.
+    /// Panics on failure
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    #[must_use]
+    fn insert_with_capacity(&mut self, capacity: C) -> K {
+        self.try_insert_with_capacity(capacity).unwrap()
+    }
+
+    /// Allocate an empty container with the given capacity
     ///
     /// Return an error on failure
-    ///
-    /// Leaves the pool in an unspecified state and returns an unspecified value or panics if used on an unrecognized key
     #[must_use]
-    fn insert_with_capacity(&mut self, capacity: C) -> Result<K, ()>;
+    fn try_insert_with_capacity(&mut self, capacity: C) -> Result<K, ()>;
 
     /// Allocate an empty container with the given capacity, returning a unique key
     ///
@@ -81,14 +95,60 @@ pub trait InsertWithCapacity<K, C = usize>: ContainerPool<K> {
 
 /// An object which can be created with a given capacity
 pub trait WithCapacity<C = usize> {
+    #[must_use]
     fn new_with_capacity(capacity: C) -> Self;
 }
 
-/// A [`Pool`] which associates keys `K` with a length
-pub trait LenPool<K>: Pool<K> {
+/// A [`Pool`] which associates keys `K` with whether they are empty
+pub trait IsEmptyPool<K> {
+    /// Get whether the object associated with the key `key` is empty
+    #[must_use]
+    fn key_is_empty(&self, key: K) -> bool;
+}
+
+/// A pool which associates keys `K` with a length
+///
+/// An empty object should have length 0
+pub trait LenPool<K>: IsEmptyPool<K> {
     /// Get the length of the object associated with the key `key`
     #[must_use]
-    fn get_len(&self, key: K) -> usize;
+    fn key_len(&self, key: K) -> usize;
+}
+
+/// An object which might be empty
+pub trait IsEmpty {
+    /// Get whether this object might be empty
+    #[must_use]
+    fn is_empty(&self) -> bool;
+}
+
+/// An object with a length
+pub trait HasLen: IsEmpty {
+    /// Get the length of this object
+    #[must_use]
+    fn len(&self) -> usize;
+}
+
+impl<P, K> IsEmptyPool<K> for P
+where
+    P: PoolRef<K>,
+    P::Object: IsEmpty,
+{
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn key_is_empty(&self, key: K) -> bool {
+        self.at(key).is_empty()
+    }
+}
+
+impl<P, K> LenPool<K> for P
+where
+    P: PoolRef<K>,
+    P::Object: HasLen,
+{
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn key_len(&self, key: K) -> usize {
+        self.at(key).len()
+    }
 }
 
 impl<V> Container for Vec<V> {
@@ -123,12 +183,14 @@ impl<V> Container for ecow::EcoVec<V> {
 }
 
 impl<V> WithCapacity for Vec<V> {
+    #[cfg_attr(not(tarpaulin), inline(always))]
     fn new_with_capacity(capacity: usize) -> Self {
         Vec::with_capacity(capacity)
     }
 }
 
 impl<V> WithCapacity for VecDeque<V> {
+    #[cfg_attr(not(tarpaulin), inline(always))]
     fn new_with_capacity(capacity: usize) -> Self {
         VecDeque::with_capacity(capacity)
     }
@@ -136,6 +198,7 @@ impl<V> WithCapacity for VecDeque<V> {
 
 #[cfg(feature = "smallvec")]
 impl<A: smallvec::Array> WithCapacity for smallvec::SmallVec<A> {
+    #[cfg_attr(not(tarpaulin), inline(always))]
     fn new_with_capacity(capacity: usize) -> Self {
         smallvec::SmallVec::with_capacity(capacity)
     }
@@ -143,7 +206,110 @@ impl<A: smallvec::Array> WithCapacity for smallvec::SmallVec<A> {
 
 #[cfg(feature = "ecow")]
 impl<V> WithCapacity for ecow::EcoVec<V> {
+    #[cfg_attr(not(tarpaulin), inline(always))]
     fn new_with_capacity(capacity: usize) -> Self {
         ecow::EcoVec::with_capacity(capacity)
+    }
+}
+
+impl<V> IsEmpty for Vec<V> {
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn is_empty(&self) -> bool {
+        self.is_empty()
+    }
+}
+
+impl<V> IsEmpty for [V] {
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn is_empty(&self) -> bool {
+        self.is_empty()
+    }
+}
+
+impl<V, const N: usize> IsEmpty for [V; N] {
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn is_empty(&self) -> bool {
+        N == 0
+    }
+}
+
+impl<V> IsEmpty for VecDeque<V> {
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn is_empty(&self) -> bool {
+        self.is_empty()
+    }
+}
+
+#[cfg(feature = "smallvec")]
+impl<A: smallvec::Array> IsEmpty for smallvec::SmallVec<A> {
+    fn is_empty(&self) -> bool {
+        self.is_empty()
+    }
+}
+
+#[cfg(feature = "arrayvec")]
+impl<V, const N: usize> IsEmpty for arrayvec::ArrayVec<V, N> {
+    fn is_empty(&self) -> bool {
+        self.is_empty()
+    }
+}
+
+#[cfg(feature = "ecow")]
+impl<V> IsEmpty for ecow::EcoVec<V> {
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn is_empty(&self) -> bool {
+        self.is_empty()
+    }
+}
+
+impl<V> HasLen for Vec<V> {
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn len(&self) -> usize {
+        self.len()
+    }
+}
+
+impl<V> HasLen for [V] {
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn len(&self) -> usize {
+        self.len()
+    }
+}
+
+impl<V, const N: usize> HasLen for [V; N] {
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn len(&self) -> usize {
+        N
+    }
+}
+
+impl<V> HasLen for VecDeque<V> {
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn len(&self) -> usize {
+        self.len()
+    }
+}
+
+#[cfg(feature = "smallvec")]
+impl<A: smallvec::Array> HasLen for smallvec::SmallVec<A> {
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn len(&self) -> usize {
+        self.len()
+    }
+}
+
+#[cfg(feature = "arrayvec")]
+impl<V, const N: usize> HasLen for arrayvec::ArrayVec<V, N> {
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn len(&self) -> usize {
+        self.len()
+    }
+}
+
+#[cfg(feature = "ecow")]
+impl<V> HasLen for ecow::EcoVec<V> {
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn len(&self) -> usize {
+        self.len()
     }
 }

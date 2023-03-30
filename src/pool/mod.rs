@@ -138,15 +138,15 @@ pub trait GetRef<K, V: ?Sized> {
     ///
     /// May return an arbitrary value if provided an unrecognized key.
     #[must_use]
-    fn try_get(&self, key: K) -> Option<&V>;
+    fn try_at(&self, key: K) -> Option<&V>;
 
     /// Get a reference to the value associated with a given key
     ///
     /// May panic or return an arbitrary value if provided an unrecognized key.
     #[cfg_attr(not(tarpaulin), inline(always))]
     #[must_use]
-    fn get(&self, key: K) -> &V {
-        self.try_get(key).expect("cannot get unrecognized key")
+    fn at(&self, key: K) -> &V {
+        self.try_at(key).expect("cannot get unrecognized key")
     }
 }
 
@@ -156,15 +156,15 @@ pub trait GetMut<K, V: ?Sized> {
     ///
     /// May return an arbitrary value if provided an unrecognized key.
     #[must_use]
-    fn try_get_mut(&mut self, key: K) -> Option<&mut V>;
+    fn try_at_mut(&mut self, key: K) -> Option<&mut V>;
 
     /// Get a mutable reference to the value associated with a given key
     ///
     /// May panic or return an arbitrary value if provided an unrecognized key.
     #[cfg_attr(not(tarpaulin), inline(always))]
     #[must_use]
-    fn get_mut(&mut self, key: K) -> &mut V {
-        self.try_get_mut(key)
+    fn at_mut(&mut self, key: K) -> &mut V {
+        self.try_at_mut(key)
             .expect("cannot mutably get unrecognized key")
     }
 }
@@ -181,7 +181,7 @@ pub trait PoolRef<K>: ObjectPool<K> + GetRef<K, Self::Object> {
     #[cfg_attr(not(tarpaulin), inline(always))]
     #[must_use]
     fn try_get_value(&self, key: K) -> Option<&Self::Object> {
-        self.try_get(key)
+        self.try_at(key)
     }
 
     /// Get a reference to the value associated with a given key
@@ -190,7 +190,7 @@ pub trait PoolRef<K>: ObjectPool<K> + GetRef<K, Self::Object> {
     #[cfg_attr(not(tarpaulin), inline(always))]
     #[must_use]
     fn get_value(&self, key: K) -> &Self::Object {
-        self.get(key)
+        self.at(key)
     }
 }
 impl<P, K> PoolRef<K> for P where P: ObjectPool<K> + GetRef<K, Self::Object> {}
@@ -207,7 +207,7 @@ pub trait PoolMut<K>: ObjectPool<K> + GetMut<K, Self::Object> {
     #[cfg_attr(not(tarpaulin), inline(always))]
     #[must_use]
     fn try_get_value_mut(&mut self, key: K) -> Option<&mut Self::Object> {
-        self.try_get_mut(key)
+        self.try_at_mut(key)
     }
 
     /// Get a mutable reference to the value associated with a given key
@@ -216,7 +216,7 @@ pub trait PoolMut<K>: ObjectPool<K> + GetMut<K, Self::Object> {
     #[cfg_attr(not(tarpaulin), inline(always))]
     #[must_use]
     fn get_value_mut(&mut self, key: K) -> &mut Self::Object {
-        self.get_mut(key)
+        self.at_mut(key)
     }
 }
 impl<P, K> PoolMut<K> for P where P: ObjectPool<K> + GetMut<K, Self::Object> {}
@@ -257,14 +257,14 @@ impl<K, V> DoubleRemovePool<K> for EmptyPool<V> {}
 
 impl<K, V> GetRef<K, V> for EmptyPool<V> {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_get(&self, _key: K) -> Option<&V> {
+    fn try_at(&self, _key: K) -> Option<&V> {
         None
     }
 }
 
 impl<K, V> GetMut<K, V> for EmptyPool<V> {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_get_mut(&mut self, _key: K) -> Option<&mut V> {
+    fn try_at_mut(&mut self, _key: K) -> Option<&mut V> {
         None
     }
 }
@@ -334,7 +334,7 @@ where
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn delete(&mut self, key: K) {
-        if let Some(slot) = self.0.get_mut(key.index()) {
+        if let Some(slot) = self.0.try_at_mut(key.index()) {
             *slot = Default::default()
         }
     }
@@ -373,7 +373,7 @@ where
     where
         V: Sized,
     {
-        let r = self.0.get_mut(key.index())?;
+        let r = self.0.try_at_mut(key.index())?;
         let mut result = V::default();
         std::mem::swap(&mut result, r);
         Some(result)
@@ -390,7 +390,7 @@ where
     where
         V: Sized,
     {
-        self.0.get(key.index()).cloned()
+        self.0.try_at(key.index()).cloned()
     }
 }
 
@@ -399,8 +399,8 @@ where
     K: ContiguousIx,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_get(&self, key: K) -> Option<&V> {
-        self.0.get(key.index())
+    fn try_at(&self, key: K) -> Option<&V> {
+        self.0.try_at(key.index())
     }
 }
 
@@ -409,8 +409,8 @@ where
     K: ContiguousIx,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_get_mut(&mut self, key: K) -> Option<&mut V> {
-        self.0.get_mut(key.index())
+    fn try_at_mut(&mut self, key: K) -> Option<&mut V> {
+        self.0.try_at_mut(key.index())
     }
 }
 
@@ -519,13 +519,13 @@ mod test {
     #[test]
     #[should_panic]
     fn empty_pool_get_fails() {
-        let _ = EmptyPool::<u64>::default().get(5);
+        let _ = EmptyPool::<u64>::default().at(5);
     }
 
     #[test]
     #[should_panic]
     fn empty_pool_get_mut_fails() {
-        let _ = EmptyPool::<u64>::default().get_mut(5);
+        let _ = EmptyPool::<u64>::default().at_mut(5);
     }
 
     #[test]
@@ -533,10 +533,10 @@ mod test {
         let mut arena = Arena::new(vec![]);
         assert_eq!(arena.insert(5), 0);
         arena.delete(0);
-        assert_eq!(arena.get(0), &0);
-        *arena.get_mut(0) = 6;
-        assert_eq!(arena.get(0), &6);
-        assert_eq!(arena.try_get(1), None);
+        assert_eq!(arena.at(0), &0);
+        *arena.at_mut(0) = 6;
+        assert_eq!(arena.at(0), &6);
+        assert_eq!(arena.try_at(1), None);
         assert_eq!(arena.try_remove(0), Some(6));
         assert_eq!(arena.try_remove(0), Some(0));
     }

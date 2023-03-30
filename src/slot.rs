@@ -95,13 +95,13 @@ pub trait Slot: Sized + InitFrom<Self::Value> {
 
 /// A type which can contain a single value of type `Self::Value`, which can be extracted
 pub trait RemoveSlot: Slot {
-    /// Take this slot's value, replacing it with a new one
+    /// Take this slot's value
     ///
     /// Return an arbitrary value if this slot does not contain a value
     #[must_use]
     fn try_remove_value(&mut self) -> Option<Self::Value>;
 
-    /// Take this slot's value, replacing it with a new one
+    /// Take this slot's value
     ///
     /// Panic or return an arbitrary value if this slot does not contain a value
     #[cfg_attr(not(tarpaulin), inline(always))]
