@@ -12,7 +12,7 @@ use crate::{
 };
 
 use super::{
-    container::{Container, InsertEmpty, InsertWithCapacity, WithCapacity},
+    container::{array::InsertFromSlice, Container, InsertEmpty, InsertWithCapacity, WithCapacity},
     GetMut, GetRef, Insert, ObjectPool, Pool, Take,
 };
 
@@ -229,15 +229,27 @@ where
     S::Value: Container + WithCapacity<C>,
     K: ContiguousIx,
 {
-    #[inline]
+    #[cfg_attr(not(tarpaulin), inline(always))]
     fn insert_with_capacity(&mut self, capacity: C) -> K {
         self.insert(WithCapacity::new_with_capacity(capacity))
     }
 
-    #[inline]
+    #[cfg_attr(not(tarpaulin), inline(always))]
     fn try_insert_with_capacity(&mut self, capacity: C) -> Result<K, ()> {
         self.try_insert(WithCapacity::new_with_capacity(capacity))
             .map_err(|_| ())
+    }
+}
+
+impl<S, K> InsertFromSlice<K> for SlabPool<S, K>
+where
+    S: RemoveSlot,
+    S::Value: Container + for<'a> From<&'a [Self::Elem]>,
+    K: ContiguousIx,
+{
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn insert_from_slice(&mut self, slice: &[Self::Elem]) -> K {
+        self.insert(slice.into())
     }
 }
 
@@ -555,6 +567,18 @@ where
     fn try_insert_with_capacity(&mut self, capacity: C) -> Result<K, ()> {
         self.try_insert(WithCapacity::new_with_capacity(capacity))
             .map_err(|_| ())
+    }
+}
+
+impl<S, K> InsertFromSlice<K> for KeySlabPool<S, K>
+where
+    S: KeySlot<K>,
+    S::Value: Container + for<'a> From<&'a [Self::Elem]>,
+    K: ContiguousIx,
+{
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn insert_from_slice(&mut self, slice: &[Self::Elem]) -> K {
+        self.insert(slice.into())
     }
 }
 

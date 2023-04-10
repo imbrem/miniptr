@@ -6,10 +6,13 @@ use std::{fmt::Debug, hash::Hash, marker::PhantomData};
 
 use bytemuck::TransparentWrapper;
 
-use crate::pool::container::{
-    array::{ArrayMutPool, ArrayRefPool, SliceMutPool, SliceRefPool},
-    stack::StackPool,
-    ContainerPool, InsertEmpty, IsEmptyPool, LenPool,
+use crate::pool::{
+    container::{
+        array::{ArrayMutPool, ArrayRefPool, InsertFromSlice, SliceMutPool, SliceRefPool},
+        stack::StackPool,
+        ContainerPool, InsertEmpty, InsertWithCapacity, IsEmptyPool, LenPool,
+    },
+    Insert,
 };
 
 /// A list backed by a pool of type `P`
@@ -100,6 +103,41 @@ where
     {
         EntityList {
             ix: pool.insert_empty(),
+            data: PhantomData,
+        }
+    }
+
+    /// Create a new list from a slice of elements
+    pub fn from_slice(slice: &[T], pool: &mut P) -> Self
+    where
+        P: InsertFromSlice<K>,
+    {
+        EntityList {
+            ix: pool.insert_from_slice(slice),
+            data: PhantomData,
+        }
+    }
+
+    /// Create a new list with the given capacity
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    pub fn new_with_capacity<C>(capacity: C, pool: &mut P) -> Self
+    where
+        P: InsertWithCapacity<K, C>,
+    {
+        EntityList {
+            ix: pool.insert_with_capacity(capacity),
+            data: PhantomData,
+        }
+    }
+
+    /// Create a new list from the given initializer
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    pub fn new_from<V>(value: V, pool: &mut P) -> Self
+    where
+        P: Insert<K, V>,
+    {
+        EntityList {
+            ix: pool.insert(value),
             data: PhantomData,
         }
     }
