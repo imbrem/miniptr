@@ -2,7 +2,7 @@
 Lists backed by a pool
 */
 
-use std::{fmt::Debug, marker::PhantomData};
+use std::{fmt::Debug, hash::Hash, marker::PhantomData};
 
 use bytemuck::TransparentWrapper;
 
@@ -74,6 +74,16 @@ where
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.ix.cmp(&other.ix)
+    }
+}
+
+impl<T, K, P> Hash for EntityList<T, K, P>
+where
+    K: Hash,
+{
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.ix.hash(state);
     }
 }
 
