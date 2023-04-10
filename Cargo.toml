@@ -3,11 +3,15 @@ name = "miniptr"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[features]
+default = ["smallvec", "arrayvec", "ecow"]
 
 [dependencies]
 bytemuck = { version = "1.13.1", features = ["derive"] }
 either = "1.8.1"
+smallvec = { version = "1.10", optional = true }
+arrayvec = { version = "0.7", optional = true }
+ecow = { version = "0.1.0", optional = true }
 
 [dev-dependencies]
 criterion = "0.4"

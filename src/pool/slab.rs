@@ -11,7 +11,10 @@ use crate::{
     slot::{InitFrom, KeySlot, RemoveSlot, Slot, SlotMut, SlotRef},
 };
 
-use super::{GetMut, GetRef, Insert, Pool, RemovePool};
+use super::{
+    container::{Container, InsertEmpty, InsertWithCapacity, WithCapacity},
+    GetMut, GetRef, Insert, ObjectPool, Pool, Take,
+};
 
 /// A simple slab allocator supporting recycling of objects with a free-list
 ///
@@ -187,13 +190,62 @@ where
     }
 }
 
+impl<S, K> InsertEmpty<K> for SlabPool<S, K>
+where
+    S: Slot,
+    S::Value: Container + Default,
+    K: ContiguousIx,
+{
+    #[inline]
+    fn try_insert_empty(&mut self) -> Result<K, ()> {
+        if let Some(free) = self.free_list.pop() {
+            self.pool[free.index()].set_default_value();
+            Ok(free)
+        } else if let Some(ix) = K::try_new(self.pool.len()) {
+            self.pool.push(S::default_value());
+            Ok(ix)
+        } else {
+            Err(())
+        }
+    }
+
+    #[inline]
+    fn insert_unique_empty(&mut self) -> Result<K, ()> {
+        if let Some(free) = self.free_list.pop() {
+            self.pool[free.index()].set_default_value();
+            Ok(free)
+        } else if let Some(ix) = K::try_new(self.pool.len()) {
+            self.pool.push(S::default_value());
+            Ok(ix)
+        } else {
+            Err(())
+        }
+    }
+}
+
+impl<S, K, C> InsertWithCapacity<K, C> for SlabPool<S, K>
+where
+    S: Slot,
+    S::Value: Container + WithCapacity<C>,
+    K: ContiguousIx,
+{
+    #[inline]
+    fn insert_with_capacity(&mut self, capacity: C) -> K {
+        self.insert(WithCapacity::new_with_capacity(capacity))
+    }
+
+    #[inline]
+    fn try_insert_with_capacity(&mut self, capacity: C) -> Result<K, ()> {
+        self.try_insert(WithCapacity::new_with_capacity(capacity))
+            .map_err(|_| ())
+    }
+}
+
 impl<S, K> Pool<K> for SlabPool<S, K>
 where
     S: RemoveSlot,
     K: ContiguousIx,
 {
-    type Value = S::Value;
-
     #[inline]
     fn delete(&mut self, key: K) {
         self.pool[key.index()].delete_value();
@@ -201,20 +253,28 @@ where
     }
 }
 
-impl<S, K> RemovePool<K> for SlabPool<S, K>
+impl<S, K> ObjectPool<K> for SlabPool<S, K>
+where
+    S: RemoveSlot,
+    K: ContiguousIx,
+{
+    type Object = S::Value;
+}
+
+impl<S, K> Take<K, S::Value> for SlabPool<S, K>
 where
     S: RemoveSlot,
     K: ContiguousIx,
 {
     #[inline]
-    fn try_remove(&mut self, key: K) -> Option<Self::Value> {
+    fn try_take(&mut self, key: K) -> Option<S::Value> {
         let result = self.pool[key.index()].try_remove_value()?;
         self.free_list.push(key);
         Some(result)
     }
 
     #[inline]
-    fn remove(&mut self, key: K) -> Self::Value {
+    fn take(&mut self, key: K) -> S::Value {
         let result = self.pool[key.index()].remove_value();
         self.free_list.push(key);
         result
@@ -227,12 +287,12 @@ where
     K: ContiguousIx,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_get(&self, key: K) -> Option<&S::Value> {
+    fn try_at(&self, key: K) -> Option<&S::Value> {
         self.pool.get(key.index())?.try_value()
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn get(&self, key: K) -> &S::Value {
+    fn at(&self, key: K) -> &S::Value {
         self.pool[key.index()].value()
     }
 }
@@ -243,12 +303,12 @@ where
     K: ContiguousIx,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_get_mut(&mut self, key: K) -> Option<&mut S::Value> {
+    fn try_at_mut(&mut self, key: K) -> Option<&mut S::Value> {
         self.pool.get_mut(key.index())?.try_value_mut()
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn get_mut(&mut self, key: K) -> &mut S::Value {
+    fn at_mut(&mut self, key: K) -> &mut S::Value {
         self.pool[key.index()].value_mut()
     }
 }
@@ -435,13 +495,74 @@ where
     }
 }
 
+impl<S, K> InsertEmpty<K> for KeySlabPool<S, K>
+where
+    S: KeySlot<K>,
+    S::Value: Container + Default,
+    K: ContiguousIx,
+{
+    #[inline]
+    fn try_insert_empty(&mut self) -> Result<K, ()> {
+        let Some(key) = self.next_key() else { return Err(()) };
+        self.free_head = if let Some(value) = self.pool.get_mut(self.free_head) {
+            let key = value.key();
+            value.set_default_value();
+            let ki = key.index();
+            if self.free_head == ki {
+                self.pool.len()
+            } else {
+                ki
+            }
+        } else {
+            self.pool.push(S::default_value());
+            self.pool.len()
+        };
+        Ok(key)
+    }
+
+    #[inline]
+    fn insert_unique_empty(&mut self) -> Result<K, ()> {
+        let Some(key) = self.next_key() else { return Err(()) };
+        self.free_head = if let Some(value) = self.pool.get_mut(self.free_head) {
+            let key = value.key();
+            value.set_default_value();
+            let ki = key.index();
+            if self.free_head == ki {
+                self.pool.len()
+            } else {
+                ki
+            }
+        } else {
+            self.pool.push(S::default_value());
+            self.pool.len()
+        };
+        Ok(key)
+    }
+}
+
+impl<S, K, C> InsertWithCapacity<K, C> for KeySlabPool<S, K>
+where
+    S: KeySlot<K>,
+    S::Value: Container + WithCapacity<C>,
+    K: ContiguousIx,
+{
+    #[inline]
+    fn insert_with_capacity(&mut self, capacity: C) -> K {
+        self.insert(WithCapacity::new_with_capacity(capacity))
+    }
+
+    #[inline]
+    fn try_insert_with_capacity(&mut self, capacity: C) -> Result<K, ()> {
+        self.try_insert(WithCapacity::new_with_capacity(capacity))
+            .map_err(|_| ())
+    }
+}
+
 impl<S, K> Pool<K> for KeySlabPool<S, K>
 where
     S: KeySlot<K>,
     K: ContiguousIx,
 {
-    type Value = S::Value;
-
     #[inline]
     fn delete(&mut self, key: K) {
         let f = if self.free_head < self.pool.len() {
@@ -455,13 +576,21 @@ where
     }
 }
 
-impl<S, K> RemovePool<K> for KeySlabPool<S, K>
+impl<S, K> ObjectPool<K> for KeySlabPool<S, K>
+where
+    S: KeySlot<K>,
+    K: ContiguousIx,
+{
+    type Object = S::Value;
+}
+
+impl<S, K> Take<K, S::Value> for KeySlabPool<S, K>
 where
     S: KeySlot<K>,
     K: ContiguousIx,
 {
     #[inline]
-    fn try_remove(&mut self, key: K) -> Option<Self::Value> {
+    fn try_take(&mut self, key: K) -> Option<S::Value> {
         let f = if self.free_head < self.pool.len() {
             K::new(self.free_head)
         } else {
@@ -474,7 +603,7 @@ where
     }
 
     #[inline]
-    fn remove(&mut self, key: K) -> Self::Value {
+    fn take(&mut self, key: K) -> S::Value {
         let f = if self.free_head < self.pool.len() {
             K::new(self.free_head)
         } else {
@@ -493,12 +622,12 @@ where
     K: ContiguousIx,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_get(&self, key: K) -> Option<&S::Value> {
+    fn try_at(&self, key: K) -> Option<&S::Value> {
         self.pool.get(key.index())?.try_value()
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn get(&self, key: K) -> &S::Value {
+    fn at(&self, key: K) -> &S::Value {
         self.pool[key.index()].value()
     }
 }
@@ -509,18 +638,22 @@ where
     K: ContiguousIx,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_get_mut(&mut self, key: K) -> Option<&mut S::Value> {
+    fn try_at_mut(&mut self, key: K) -> Option<&mut S::Value> {
         self.pool.get_mut(key.index())?.try_value_mut()
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn get_mut(&mut self, key: K) -> &mut S::Value {
+    fn at_mut(&mut self, key: K) -> &mut S::Value {
         self.pool[key.index()].value_mut()
     }
 }
 
 #[cfg(test)]
 mod test {
+    use crate::pool::container::map::{GetIndex, GetIndexMut};
+    use crate::pool::container::stack::StackPool;
+    use crate::pool::container::{IsEmptyPool, LenPool};
+    use crate::pool::RemovePool;
     use crate::slot::{CloneSlot, DefaultSlot};
 
     use super::*;
@@ -563,8 +696,8 @@ mod test {
             let mut s = format!("{i}");
             assert_eq!(pool.get_slot(i).unwrap().0, s);
             assert_eq!(pool.get_slot_mut(i).unwrap().0, s);
-            assert_eq!(pool.get(i), &s);
-            assert_eq!(pool.get_mut(i), &mut s);
+            assert_eq!(pool.at(i), &s);
+            assert_eq!(pool.at_mut(i), &mut s);
             assert_eq!(pool[i], s);
             s.push('a');
             pool[i].push('a');
@@ -588,7 +721,7 @@ mod test {
             if i % 2 != 0 {
                 let mut s = format!("{i}a");
                 assert_eq!(v.0, s);
-                assert_eq!(pool.get(i), &s);
+                assert_eq!(pool.at(i), &s);
                 assert_eq!(pool[i], s);
                 s.push('b');
                 pool[i].push('b');
@@ -625,10 +758,10 @@ mod test {
             let mut s = format!("{i}c");
             assert_eq!(pool.get_slot(keys[i as usize]).unwrap().0, s);
             assert_eq!(pool.get_slot_mut(keys[i as usize]).unwrap().0, s);
-            assert_eq!(pool.get(keys[i as usize]), &s);
-            assert_eq!(pool.try_get(keys[i as usize]), Some(&s));
-            assert_eq!(pool.get_mut(keys[i as usize]), &s);
-            assert_eq!(pool.try_get_mut(keys[i as usize]), Some(&mut s));
+            assert_eq!(pool.at(keys[i as usize]), &s);
+            assert_eq!(pool.try_at(keys[i as usize]), Some(&s));
+            assert_eq!(pool.at_mut(keys[i as usize]), &s);
+            assert_eq!(pool.try_at_mut(keys[i as usize]), Some(&mut s));
             assert_eq!(pool[keys[i as usize]], s);
             s.push('d');
             pool[keys[i as usize]].push('d');
@@ -696,8 +829,8 @@ mod test {
             let mut s = format!("{i}");
             assert_eq!(pool.get_slot(i).unwrap().as_ref(), Either::Right(&s));
             assert_eq!(pool.get_slot_mut(i).unwrap().as_ref(), Either::Right(&s));
-            assert_eq!(pool.get(i), &s);
-            assert_eq!(pool.get_mut(i), &mut s);
+            assert_eq!(pool.at(i), &s);
+            assert_eq!(pool.at_mut(i), &mut s);
             assert_eq!(pool[i], s);
             s.push('a');
             pool[i].push('a');
@@ -725,7 +858,7 @@ mod test {
             } else {
                 let mut s = format!("{i}a");
                 assert_eq!(v.as_ref(), Either::Right(&s));
-                assert_eq!(pool.get(i), &s);
+                assert_eq!(pool.at(i), &s);
                 assert_eq!(pool[i], s);
                 s.push('b');
                 pool[i].push('b');
@@ -768,10 +901,10 @@ mod test {
                 pool.get_slot_mut(keys[i as usize]).unwrap().as_ref(),
                 Either::Right(&s)
             );
-            assert_eq!(pool.get(keys[i as usize]), &s);
-            assert_eq!(pool.try_get(keys[i as usize]), Some(&s));
-            assert_eq!(pool.get_mut(keys[i as usize]), &s);
-            assert_eq!(pool.try_get_mut(keys[i as usize]), Some(&mut s));
+            assert_eq!(pool.at(keys[i as usize]), &s);
+            assert_eq!(pool.try_at(keys[i as usize]), Some(&s));
+            assert_eq!(pool.at_mut(keys[i as usize]), &s);
+            assert_eq!(pool.try_at_mut(keys[i as usize]), Some(&mut s));
             assert_eq!(pool[keys[i as usize]], s);
             s.push('d');
             pool[keys[i as usize]].push('d');
@@ -889,5 +1022,104 @@ mod test {
                 );
             }
         }
+    }
+
+    #[test]
+    fn slab_stack_pool() {
+        let mut pool: SlabPool<DefaultSlot<Vec<u32>>> = SlabPool::new();
+        let s1 = pool.insert_empty();
+        assert_eq!(s1, 0);
+        assert!(pool.key_is_empty(s1));
+        assert_eq!(pool.key_len(s1), 0);
+        pool.push(s1, 5);
+        assert!(!pool.key_is_empty(s1));
+        assert_eq!(pool.key_len(s1), 1);
+        pool.push(s1, 6);
+        assert!(!pool.key_is_empty(s1));
+        assert_eq!(pool.key_len(s1), 2);
+        assert_eq!(pool.pop(s1), Some(6));
+        assert!(!pool.key_is_empty(s1));
+        assert_eq!(pool.key_len(s1), 1);
+        let s2 = pool.insert_unique_empty().unwrap();
+        assert_eq!(s2, 1);
+        let s3 = pool.insert_with_capacity(3);
+        assert_eq!(s3, 2);
+        let s4 = pool.insert_with_capacity(4);
+        assert_eq!(s4, 3);
+        assert_eq!(pool.remove(s4), vec![]);
+        let s4 = pool.insert_empty();
+        assert_eq!(s4, 3);
+        assert_eq!(s4, pool.into_pushed(s4, 5));
+        assert_eq!(Some((s4, 5)), pool.into_popped(s4));
+        assert_eq!(None, pool.into_popped(s4));
+
+        let mut small_pool: SlabPool<DefaultSlot<Vec<u32>>, u8> = SlabPool::new();
+        for i in 0..=255 {
+            assert_eq!(Ok(i), small_pool.try_insert_empty());
+        }
+        assert_eq!(Err(()), small_pool.try_insert_empty());
+        small_pool.clear();
+        for i in 0..=255 {
+            assert_eq!(Ok(i), small_pool.insert_unique_empty());
+        }
+        assert_eq!(Err(()), small_pool.insert_unique_empty());
+        small_pool.clear();
+        for i in 0..=255 {
+            assert_eq!(Ok(i), small_pool.try_insert_with_capacity(i as usize));
+        }
+        assert_eq!(Err(()), small_pool.try_insert_with_capacity(3));
+    }
+
+    #[test]
+    fn key_slab_stack_pool() {
+        let mut pool: KeySlabPool<Either<usize, Vec<u32>>> = KeySlabPool::new();
+        let s1 = pool.insert_empty();
+        assert_eq!(s1, 0);
+        assert!(pool.key_is_empty(s1));
+        assert_eq!(pool.key_len(s1), 0);
+        pool.push(s1, 5);
+        assert!(!pool.key_is_empty(s1));
+        assert_eq!(pool.key_len(s1), 1);
+        pool.push(s1, 6);
+        assert!(!pool.key_is_empty(s1));
+        assert_eq!(pool.key_len(s1), 2);
+        assert_eq!(pool.pop(s1), Some(6));
+        assert!(!pool.key_is_empty(s1));
+        assert_eq!(pool.key_len(s1), 1);
+        assert_eq!(pool.get_index(s1, 0), Some(&5));
+        assert_eq!(pool.get_index_unchecked(s1, 0), &5);
+        assert_eq!(pool.get_index_mut(s1, 0), Some(&mut 5));
+        assert_eq!(pool.get_index_mut_unchecked(s1, 0), &mut 5);
+        assert_eq!(pool.get_index(s1, 1), None);
+        let s2 = pool.insert_unique_empty().unwrap();
+        assert_eq!(s2, 1);
+        let s3 = pool.insert_with_capacity(3);
+        assert_eq!(s3, 2);
+        let s4 = pool.insert_with_capacity(4);
+        assert_eq!(s4, 3);
+        assert_eq!(pool.remove(s4), vec![]);
+        let s4 = pool.insert_empty();
+        assert_eq!(s4, 3);
+        assert_eq!(s4, pool.into_pushed(s4, 5));
+        assert_eq!(Some((s4, 5)), pool.into_popped(s4));
+        assert_eq!(None, pool.into_popped(s4));
+
+        assert_eq!(pool.key_capacity(s4), pool.at(s4).capacity());
+
+        let mut small_pool: SlabPool<DefaultSlot<Vec<u32>>, u8> = SlabPool::new();
+        for i in 0..=255 {
+            assert_eq!(Ok(i), small_pool.try_insert_empty());
+        }
+        assert_eq!(Err(()), small_pool.try_insert_empty());
+        small_pool.clear();
+        for i in 0..=255 {
+            assert_eq!(Ok(i), small_pool.insert_unique_empty());
+        }
+        assert_eq!(Err(()), small_pool.insert_unique_empty());
+        small_pool.clear();
+        for i in 0..=255 {
+            assert_eq!(Ok(i), small_pool.try_insert_with_capacity(i as usize));
+        }
+        assert_eq!(Err(()), small_pool.try_insert_with_capacity(3));
     }
 }

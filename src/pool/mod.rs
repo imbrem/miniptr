@@ -4,10 +4,11 @@ A trait for simple allocators
 
 use std::marker::PhantomData;
 
-use bytemuck::TransparentWrapper;
+use bytemuck::{TransparentWrapper, Zeroable};
 
 use crate::index::ContiguousIx;
 
+pub mod container;
 pub mod slab;
 
 /// A pool which supports inserting values of type `V` for keys of type `K`
@@ -16,18 +17,13 @@ pub trait Insert<K, V> {
     ///
     /// Returns `val` as an error if the arena has run out of space
     #[must_use]
-    fn try_insert(&mut self, val: V) -> Result<K, V>
-    where
-        V: Sized;
+    fn try_insert(&mut self, val: V) -> Result<K, V>;
 
     /// Insert `v` into the pool, assigning a new key which is returned
     ///
     /// Panics if the pool has run out of space
     #[must_use]
-    fn insert(&mut self, val: V) -> K
-    where
-        V: Sized,
-    {
+    fn insert(&mut self, val: V) -> K {
         match self.try_insert(val) {
             Ok(key) => key,
             Err(_) => panic!("arena out of space"),
@@ -35,11 +31,8 @@ pub trait Insert<K, V> {
     }
 }
 
-/// A pool mapping keys of type `K` to values of type `V`
-pub trait Pool<K>: Insert<K, Self::Value> {
-    /// The value type stored by this pool
-    type Value;
-
+/// A pool indexed by keys of type `K` to values of type `V`
+pub trait Pool<K> {
     /// Deletes the key `k` from the mapping.
     ///
     /// Note that this is *not* guaranteed to do anything; in pools which do not support the removal of keys, this may simply be a no-op.
@@ -55,6 +48,16 @@ pub trait Pool<K>: Insert<K, Self::Value> {
     fn delete(&mut self, key: K);
 }
 
+// A pool mapping keys of type `K` to values of type `V`
+pub trait ObjectPool<K>: Pool<K> {
+    /// The value type stored by this pool
+    type Object;
+}
+
+/// A pool supporting insertion of objects, yielding keys
+pub trait InsertPool<K>: ObjectPool<K> + Insert<K, Self::Object> {}
+impl<K, P> InsertPool<K> for P where P: ObjectPool<K> + Insert<K, Self::Object> {}
+
 /// A [`Pool`] for which `Pool::delete` may be called multiple times on the same key without modifying any other key; panicking is allowed.
 ///
 /// If [`RemovePool`] is also implemented, `Self::remove` may still return an arbitrary value on a deleted key, but may *not* modify any other key.
@@ -69,20 +72,18 @@ pub trait DoubleFreePool<K>: SafeFreePool<K> {}
 /// A [`Pool`] for which `Pool::remove` may be called multiple times on the same key, and is guaranteed to return `None` on previously removed keys
 pub trait DoubleRemovePool<K>: DoubleFreePool<K> {}
 
-/// A [`Pool`] supporting the removal of keys
-pub trait RemovePool<K>: Pool<K> {
-    /// Deletes the key `k` from the mapping, returning its value.
+/// A pool which supports removing a key and extracting values of type `V`
+pub trait Take<K, V> {
+    /// Try to take the value associated with key `k` from the mapping
     ///
     /// Returns an arbitrary value, leaving `self` in an unspecified but valid state, if `k` is unrecognized.
     /// `k` is considered unrecognized if it:
     /// - Was not returned from `self.insert` or `self.try_insert`
     /// - Has already been deleted
     #[must_use]
-    fn try_remove(&mut self, key: K) -> Option<Self::Value>
-    where
-        Self::Value: Sized;
+    fn try_take(&mut self, key: K) -> Option<V>;
 
-    /// Deletes the key `k` from the mapping, returning its value.
+    /// Takes the value associated with key `k` from the mapping
     ///
     /// Panics or returns an arbitrary value, leaving `self` in an unspecified but valid state, if `k` is unrecognized.
     /// `k` is considered unrecognized if it:
@@ -90,62 +91,138 @@ pub trait RemovePool<K>: Pool<K> {
     /// - Has already been deleted
     #[cfg_attr(not(tarpaulin), inline(always))]
     #[must_use]
-    fn remove(&mut self, key: K) -> Self::Value
-    where
-        Self::Value: Sized,
-    {
-        self.try_remove(key)
-            .expect("cannot remove unrecognized key")
+    fn take(&mut self, key: K) -> V {
+        self.try_take(key).expect("cannot take unrecognized key")
     }
 }
 
+/// A [`Pool`] supporting the removal of keys
+pub trait RemovePool<K>: ObjectPool<K> + Take<K, Self::Object> {
+    /// Deletes the key `k` from the mapping, returning its value.
+    ///
+    /// Guaranteed to have the same behaviour as [`Take<K, Self::Value`]'s `try_take` method,
+    ///
+    /// Returns an arbitrary value, leaving `self` in an unspecified but valid state, if `k` is unrecognized.
+    /// `k` is considered unrecognized if it:
+    /// - Was not returned from `self.insert` or `self.try_insert`
+    /// - Has already been deleted
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    #[must_use]
+    fn try_remove(&mut self, key: K) -> Option<Self::Object> {
+        self.try_take(key)
+    }
+
+    /// Deletes the key `k` from the mapping, returning its value.
+    ///
+    /// Guaranteed to have the same behaviour as [`Take<K, Self::Value`]'s `take` method,
+    ///
+    /// Panics or returns an arbitrary value, leaving `self` in an unspecified but valid state, if `k` is unrecognized.
+    /// `k` is considered unrecognized if it:
+    /// - Was not returned from `self.insert` or `self.try_insert`
+    /// - Has already been deleted
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    #[must_use]
+    fn remove(&mut self, key: K) -> Self::Object
+    where
+        Self::Object: Sized,
+    {
+        self.take(key)
+    }
+}
+
+impl<P, K> RemovePool<K> for P where P: ObjectPool<K> + Take<K, Self::Object> {}
+
 /// A pool providing read-only access to values of type `V` given a key of type `K`
-pub trait GetRef<K, V> {
+pub trait GetRef<K, V: ?Sized> {
     /// Try to get a reference to the value associated with a given key
     ///
     /// May return an arbitrary value if provided an unrecognized key.
     #[must_use]
-    fn try_get(&self, key: K) -> Option<&V>;
+    fn try_at(&self, key: K) -> Option<&V>;
 
     /// Get a reference to the value associated with a given key
     ///
     /// May panic or return an arbitrary value if provided an unrecognized key.
     #[cfg_attr(not(tarpaulin), inline(always))]
     #[must_use]
-    fn get(&self, key: K) -> &V {
-        self.try_get(key).expect("cannot get unrecognized key")
+    fn at(&self, key: K) -> &V {
+        self.try_at(key).expect("cannot get unrecognized key")
     }
 }
 
 /// An pool providing mutable access to values given a key of type `K`
-pub trait GetMut<K, V> {
+pub trait GetMut<K, V: ?Sized> {
     /// Try to get a reference to the value associated with a given key
     ///
     /// May return an arbitrary value if provided an unrecognized key.
     #[must_use]
-    fn try_get_mut(&mut self, key: K) -> Option<&mut V>;
+    fn try_at_mut(&mut self, key: K) -> Option<&mut V>;
 
     /// Get a mutable reference to the value associated with a given key
     ///
     /// May panic or return an arbitrary value if provided an unrecognized key.
     #[cfg_attr(not(tarpaulin), inline(always))]
     #[must_use]
-    fn get_mut(&mut self, key: K) -> &mut V {
-        self.try_get_mut(key)
+    fn at_mut(&mut self, key: K) -> &mut V {
+        self.try_at_mut(key)
             .expect("cannot mutably get unrecognized key")
     }
 }
 
 /// A [`Pool`] providing read-only access to values
-pub trait PoolRef<K>: Pool<K> + GetRef<K, Self::Value> {}
-impl<P, K> PoolRef<K> for P where P: Pool<K> + GetRef<K, Self::Value> {}
+///
+/// Automatically implemented for any [`Pool`] which implements [`GetRef<K, Self::Value>`].
+///
+/// Provides wrappers around [`GetRef`] methods returning `&Self::Value`, which might be useful for type inference.
+pub trait PoolRef<K>: ObjectPool<K> + GetRef<K, Self::Object> {
+    /// Try to get a reference to the value associated with a given key
+    ///
+    /// May return an arbitrary value if provided an unrecognized key.
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    #[must_use]
+    fn try_get_value(&self, key: K) -> Option<&Self::Object> {
+        self.try_at(key)
+    }
+
+    /// Get a reference to the value associated with a given key
+    ///
+    /// May panic or return an arbitrary value if provided an unrecognized key.
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    #[must_use]
+    fn get_value(&self, key: K) -> &Self::Object {
+        self.at(key)
+    }
+}
+impl<P, K> PoolRef<K> for P where P: ObjectPool<K> + GetRef<K, Self::Object> {}
 
 /// An [`Pool`] providing mutable access to values
-pub trait PoolMut<K>: Pool<K> + GetMut<K, Self::Value> {}
-impl<P, K> PoolMut<K> for P where P: Pool<K> + GetMut<K, Self::Value> {}
+///
+/// Automatically implemented for any [`Pool`] which implements [`GetMut<K, Self::Value>`].
+///
+/// Provides wrappers around [`GetMut`] methods returning `&mut Self::Value`, which might be useful for type inference.
+pub trait PoolMut<K>: ObjectPool<K> + GetMut<K, Self::Object> {
+    /// Try to get a reference to the value associated with a given key
+    ///
+    /// May return an arbitrary value if provided an unrecognized key.
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    #[must_use]
+    fn try_get_value_mut(&mut self, key: K) -> Option<&mut Self::Object> {
+        self.try_at_mut(key)
+    }
+
+    /// Get a mutable reference to the value associated with a given key
+    ///
+    /// May panic or return an arbitrary value if provided an unrecognized key.
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    #[must_use]
+    fn get_value_mut(&mut self, key: K) -> &mut Self::Object {
+        self.at_mut(key)
+    }
+}
+impl<P, K> PoolMut<K> for P where P: ObjectPool<K> + GetMut<K, Self::Object> {}
 
 /// A [`Pool`] which does not contain any values, and is always full
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Default)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Default, Zeroable)]
 pub struct EmptyPool<V>(PhantomData<V>);
 
 impl<K, V> Insert<K, V> for EmptyPool<V> {
@@ -156,20 +233,22 @@ impl<K, V> Insert<K, V> for EmptyPool<V> {
 }
 
 impl<K, V> Pool<K> for EmptyPool<V> {
-    type Value = V;
-
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn delete(&mut self, _key: K) {
         // This is a no-op, since all keys are "already deleted"
     }
 }
 
+impl<K, V> ObjectPool<K> for EmptyPool<V> {
+    type Object = V;
+}
+
 impl<K, V> SafeFreePool<K> for EmptyPool<V> {}
 impl<K, V> DoubleFreePool<K> for EmptyPool<V> {}
 
-impl<K, V> RemovePool<K> for EmptyPool<V> {
+impl<K, V> Take<K, V> for EmptyPool<V> {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_remove(&mut self, _key: K) -> Option<V> {
+    fn try_take(&mut self, _key: K) -> Option<V> {
         None
     }
 }
@@ -178,14 +257,14 @@ impl<K, V> DoubleRemovePool<K> for EmptyPool<V> {}
 
 impl<K, V> GetRef<K, V> for EmptyPool<V> {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_get(&self, _key: K) -> Option<&V> {
+    fn try_at(&self, _key: K) -> Option<&V> {
         None
     }
 }
 
 impl<K, V> GetMut<K, V> for EmptyPool<V> {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_get_mut(&mut self, _key: K) -> Option<&mut V> {
+    fn try_at_mut(&mut self, _key: K) -> Option<&mut V> {
         None
     }
 }
@@ -194,23 +273,31 @@ impl<K, V> GetMut<K, V> for EmptyPool<V> {
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Default, TransparentWrapper)]
 #[repr(transparent)]
 #[transparent(V)]
-pub struct Arena<V, K = usize>(V, PhantomData<K>);
+pub struct Arena<V, K = usize, D = ByDefault>(V, PhantomData<K>, PhantomData<D>);
+
+/// Remove a value from this arena by cloning it out
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Default, Zeroable)]
+pub struct ByClone;
+
+/// Remove a value from this arena by replacing it with `Default`
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Default, Zeroable)]
+pub struct ByDefault;
 
 impl<V> Arena<Vec<V>> {
     #[cfg_attr(not(tarpaulin), inline(always))]
     pub fn new(value: Vec<V>) -> Arena<Vec<V>> {
-        Arena(value, PhantomData)
+        Arena(value, PhantomData, PhantomData)
     }
 }
 
-impl<V, K> From<V> for Arena<V, K> {
+impl<V, K, D> From<V> for Arena<V, K, D> {
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn from(value: V) -> Self {
-        Arena(value, PhantomData)
+        Arena(value, PhantomData, PhantomData)
     }
 }
 
-impl<K, V> Insert<K, V> for Arena<Vec<V>, K>
+impl<K, V, D> Insert<K, V> for Arena<Vec<V>, K, D>
 where
     K: ContiguousIx,
 {
@@ -225,38 +312,85 @@ where
     }
 }
 
-impl<K, V> Pool<K> for Arena<Vec<V>, K>
+impl<K, V> Pool<K> for Arena<Vec<V>, K, ByClone>
 where
     K: ContiguousIx,
 {
-    type Value = V;
-
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn delete(&mut self, _key: K) {
-        // This is a no-op, since `Arena` does not support deleting keys
-    }
+    fn delete(&mut self, _key: K) {}
 }
 
-impl<K, V> SafeFreePool<K> for Arena<Vec<V>, K> where K: ContiguousIx {}
-impl<K, V> DoubleFreePool<K> for Arena<Vec<V>, K> where K: ContiguousIx {}
+impl<K, V> ObjectPool<K> for Arena<Vec<V>, K, ByClone>
+where
+    K: ContiguousIx,
+{
+    type Object = V;
+}
 
-impl<K, V> RemovePool<K> for Arena<Vec<V>, K>
+impl<K, V> Pool<K> for Arena<Vec<V>, K, ByDefault>
 where
     K: ContiguousIx,
     V: Default,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_remove(&mut self, key: K) -> Option<Self::Value>
+    fn delete(&mut self, key: K) {
+        if let Some(slot) = self.0.try_at_mut(key.index()) {
+            *slot = Default::default()
+        }
+    }
+}
+
+impl<K, V> ObjectPool<K> for Arena<Vec<V>, K, ByDefault>
+where
+    K: ContiguousIx,
+    V: Default,
+{
+    type Object = V;
+}
+
+impl<K, V> SafeFreePool<K> for Arena<Vec<V>, K, ByClone> where K: ContiguousIx {}
+impl<K, V> DoubleFreePool<K> for Arena<Vec<V>, K, ByClone> where K: ContiguousIx {}
+impl<K, V> SafeFreePool<K> for Arena<Vec<V>, K, ByDefault>
+where
+    K: ContiguousIx,
+    V: Default,
+{
+}
+impl<K, V> DoubleFreePool<K> for Arena<Vec<V>, K, ByDefault>
+where
+    K: ContiguousIx,
+    V: Default,
+{
+}
+
+impl<K, V> Take<K, V> for Arena<Vec<V>, K, ByDefault>
+where
+    K: ContiguousIx,
+    V: Default,
+{
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_take(&mut self, key: K) -> Option<V>
     where
-        Self::Value: Sized,
+        V: Sized,
     {
-        // NOTE: this replaces the value with `Default`, whereas `delete` is a no-op.
-        //
-        // This is acceptable behaviour, since the value of a key after a delete operation is undefined, *but*
-        let r = self.0.get_mut(key.index())?;
+        let r = self.0.try_at_mut(key.index())?;
         let mut result = V::default();
         std::mem::swap(&mut result, r);
         Some(result)
+    }
+}
+
+impl<K, V> Take<K, V> for Arena<Vec<V>, K, ByClone>
+where
+    K: ContiguousIx,
+    V: Clone,
+{
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn try_take(&mut self, key: K) -> Option<V>
+    where
+        V: Sized,
+    {
+        self.0.try_at(key.index()).cloned()
     }
 }
 
@@ -265,8 +399,8 @@ where
     K: ContiguousIx,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_get(&self, key: K) -> Option<&V> {
-        self.0.get(key.index())
+    fn try_at(&self, key: K) -> Option<&V> {
+        self.0.try_at(key.index())
     }
 }
 
@@ -275,9 +409,90 @@ where
     K: ContiguousIx,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_get_mut(&mut self, key: K) -> Option<&mut V> {
-        self.0.get_mut(key.index())
+    fn try_at_mut(&mut self, key: K) -> Option<&mut V> {
+        self.0.try_at_mut(key.index())
     }
+}
+
+/// Forward implementations of [`Pool`], [`ObjectPool`], [`Insert`], [`Take`], [`GetRef`], and [`GetMut`] to a field of type `$P`
+#[macro_export]
+macro_rules! forward_pool_traits {
+    (<$($gen:ident),*> $ty:ty => ($e:tt) : $P:ty) => {
+        impl<$($gen,)* K> Pool<K> for $ty
+        where
+            $P: Pool<K>,
+        {
+            #[cfg_attr(not(tarpaulin), inline(always))]
+            fn delete(&mut self, key: K) {
+                self.$e.delete(key)
+            }
+        }
+
+        impl<$($gen,)* K> ObjectPool<K> for $ty
+        where
+            $P: ObjectPool<K>,
+        {
+            type Object = P::Object;
+        }
+
+        impl<$($gen,)* K, V> Insert<K, V> for $ty
+        where
+            $P: Insert<K, V>,
+        {
+            #[cfg_attr(not(tarpaulin), inline(always))]
+            fn try_insert(&mut self, val: V) -> Result<K, V> {
+                self.$e.try_insert(val)
+            }
+        }
+
+        impl<$($gen,)* K, V: ?Sized> GetRef<K, V> for $ty
+        where
+            $P: GetRef<K, V>,
+        {
+            #[cfg_attr(not(tarpaulin), inline(always))]
+            fn try_get(&self, key: K) -> Option<&V> {
+                self.$e.try_get(key)
+            }
+
+            #[cfg_attr(not(tarpaulin), inline(always))]
+            fn get(&self, key: K) -> &V {
+                self.$e.get(key)
+            }
+        }
+
+        impl<$($gen,)* K, V: ?Sized> GetMut<K, V> for $ty
+        where
+            $P: GetMut<K, V>,
+        {
+            #[cfg_attr(not(tarpaulin), inline(always))]
+            fn try_get_mut(&mut self, key: K) -> Option<&mut V> {
+                self.$e.try_get_mut(key)
+            }
+
+            #[cfg_attr(not(tarpaulin), inline(always))]
+            fn get_mut(&mut self, key: K) -> &mut V {
+                self.$e.get_mut(key)
+            }
+        }
+
+        impl<$($gen,)* K, V> Take<K, V> for $ty
+        where
+            $P: Take<K, V>,
+        {
+            #[cfg_attr(not(tarpaulin), inline(always))]
+            fn try_take(&mut self, key: K) -> Option<V> {
+                self.$e.try_take(key)
+            }
+
+            #[cfg_attr(not(tarpaulin), inline(always))]
+            fn take(&mut self, key: K) -> V {
+                self.$e.take(key)
+            }
+        }
+    };
+    (<$($gen:ident),*> $ty:ty => $P:ty) => {
+        $crate::forward_pool_traits!(<$($gen),*> $ty => (0): $P);
+    };
 }
 
 #[cfg(test)]
@@ -304,13 +519,13 @@ mod test {
     #[test]
     #[should_panic]
     fn empty_pool_get_fails() {
-        let _ = EmptyPool::<u64>::default().get(5);
+        let _ = EmptyPool::<u64>::default().at(5);
     }
 
     #[test]
     #[should_panic]
     fn empty_pool_get_mut_fails() {
-        let _ = EmptyPool::<u64>::default().get_mut(5);
+        let _ = EmptyPool::<u64>::default().at_mut(5);
     }
 
     #[test]
@@ -318,10 +533,10 @@ mod test {
         let mut arena = Arena::new(vec![]);
         assert_eq!(arena.insert(5), 0);
         arena.delete(0);
-        assert_eq!(arena.get(0), &5);
-        *arena.get_mut(0) = 6;
-        assert_eq!(arena.get(0), &6);
-        assert_eq!(arena.try_get(1), None);
+        assert_eq!(arena.at(0), &0);
+        *arena.at_mut(0) = 6;
+        assert_eq!(arena.at(0), &6);
+        assert_eq!(arena.try_at(1), None);
         assert_eq!(arena.try_remove(0), Some(6));
         assert_eq!(arena.try_remove(0), Some(0));
     }
