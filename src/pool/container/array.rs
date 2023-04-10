@@ -47,7 +47,7 @@ where
     P: ArrayRefPool<K> + ObjectPool<K> + GetRef<K, P::Object>,
     P::Object: Borrow<[P::Elem]> + 'static, //TODO: optimize or smt...
 {
-    #[inline(always)]
+    #[cfg_attr(not(tarpaulin), inline(always))]
     fn slice_at(&self, ix: K) -> &[Self::Elem] {
         self.at(ix).borrow()
     }
@@ -63,7 +63,7 @@ where
     P: ArrayMutPool<K> + ObjectPool<K> + GetMut<K, P::Object>,
     P::Object: BorrowMut<[P::Elem]> + 'static, //TODO: optimize or smt...
 {
-    #[inline(always)]
+    #[cfg_attr(not(tarpaulin), inline(always))]
     fn slice_at_mut(&mut self, ix: K) -> &mut [Self::Elem] {
         self.at_mut(ix).borrow_mut()
     }
