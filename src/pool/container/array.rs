@@ -2,6 +2,8 @@
 Traits for containers implementing arrays
 */
 
+use std::borrow::{Borrow, BorrowMut};
+
 use super::{
     map::{GetIndex, GetIndexMut},
     stack::StackPool,
@@ -36,10 +38,36 @@ pub trait ArrayPool<K>: ArrayRefPool<K> + ArrayMutPool<K> {}
 impl<P, K> ArrayPool<K> for P where P: ArrayRefPool<K> + ArrayMutPool<K> {}
 
 /// A [`Pool`] allocating immutable slices of `Self::Elem`
-pub trait SliceRefPool<K>: ArrayRefPool<K> + GetRef<K, [Self::Elem]> {}
+pub trait SliceRefPool<K>: ArrayRefPool<K> {
+    fn slice_at(&self, ix: K) -> &[Self::Elem];
+}
+
+impl<K, P> SliceRefPool<K> for P
+where
+    P: ArrayRefPool<K> + ObjectPool<K> + GetRef<K, P::Object>,
+    P::Object: Borrow<[P::Elem]> + 'static, //TODO: optimize or smt...
+{
+    #[inline(always)]
+    fn slice_at(&self, ix: K) -> &[Self::Elem] {
+        self.at(ix).borrow()
+    }
+}
 
 /// A [`Pool`] allocating mutable slices of `Self::Elem`
-pub trait SliceMutPool<K>: ArrayMutPool<K> + GetMut<K, [Self::Elem]> {}
+pub trait SliceMutPool<K>: ArrayMutPool<K> {
+    fn slice_at_mut(&mut self, ix: K) -> &mut [Self::Elem];
+}
+
+impl<K, P> SliceMutPool<K> for P
+where
+    P: ArrayMutPool<K> + ObjectPool<K> + GetMut<K, P::Object>,
+    P::Object: BorrowMut<[P::Elem]> + 'static, //TODO: optimize or smt...
+{
+    #[inline(always)]
+    fn slice_at_mut(&mut self, ix: K) -> &mut [Self::Elem] {
+        self.at_mut(ix).borrow_mut()
+    }
+}
 
 /// A [`Pool`] allocating slices of `Self::Item`
 ///
