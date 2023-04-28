@@ -87,7 +87,7 @@ impl<P, K> ArrayListPool<K> for P where P: ArrayPool<K> + StackPool<K> {}
 pub trait VecPool<K>: SlicePool<K> + StackPool<K> {}
 impl<P, K> VecPool<K> for P where P: SlicePool<K> + StackPool<K> {}
 
-pub trait InsertFromSlice<K>: ContainerPool<K> {
+pub trait InsertFromSlice<'a, K>: ContainerPool<K> {
     /// Create a new object from a slice
-    fn insert_from_slice(&mut self, slice: &[Self::Elem]) -> K;
+    fn insert_from_slice(&mut self, slice: &'a [Self::Elem]) -> K;
 }

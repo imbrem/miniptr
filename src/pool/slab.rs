@@ -241,15 +241,16 @@ where
     }
 }
 
-impl<S, K> InsertFromSlice<K> for SlabPool<S, K>
+impl<'a, S, K> InsertFromSlice<'a, K> for SlabPool<S, K>
 where
     S: RemoveSlot,
-    S::Value: Container + for<'a> From<&'a [Self::Elem]>,
+    S::Value: Container + From<&'a [Self::Elem]>,
+    Self::Elem: 'a,
     K: ContiguousIx,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn insert_from_slice(&mut self, slice: &[Self::Elem]) -> K {
-        self.insert(slice.into())
+    fn insert_from_slice(&mut self, slice: &'a [Self::Elem]) -> K {
+        self.insert(S::Value::from(slice))
     }
 }
 
@@ -570,14 +571,15 @@ where
     }
 }
 
-impl<S, K> InsertFromSlice<K> for KeySlabPool<S, K>
+impl<'a, S, K> InsertFromSlice<'a, K> for KeySlabPool<S, K>
 where
     S: KeySlot<K>,
-    S::Value: Container + for<'a> From<&'a [Self::Elem]>,
+    S::Value: Container + From<&'a [Self::Elem]>,
+    Self::Elem: 'a,
     K: ContiguousIx,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn insert_from_slice(&mut self, slice: &[Self::Elem]) -> K {
+    fn insert_from_slice(&mut self, slice: &'a [Self::Elem]) -> K {
         self.insert(slice.into())
     }
 }

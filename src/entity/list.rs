@@ -108,9 +108,9 @@ where
     }
 
     /// Create a new list from a slice of elements
-    pub fn from_slice(slice: &[T], pool: &mut P) -> Self
+    pub fn from_slice<'a>(slice: &'a [T], pool: &mut P) -> Self
     where
-        P: InsertFromSlice<K>,
+        P: InsertFromSlice<'a, K>,
     {
         EntityList {
             ix: pool.insert_from_slice(slice),
