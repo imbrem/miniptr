@@ -227,8 +227,7 @@ mod test {
 
     #[test]
     fn basic_entity_list_usage() {
-        let mut pool: SlabPool<DefaultSlot<Vec<u32>>, u32> =
-            SlabPool::<DefaultSlot<Vec<u32>>, u32>::new();
+        let mut pool: SlabPool<DefaultSlot<Vec<u32>>, u32> = SlabPool::new();
         let mut v = EntityList::new(&mut pool);
         assert_eq!(v.len(&pool), 0);
         assert_eq!(v.pop(&mut pool), None);

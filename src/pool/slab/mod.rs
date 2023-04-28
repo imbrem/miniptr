@@ -365,8 +365,7 @@ mod test {
 
     #[test]
     fn basic_slab_pool_usage() {
-        let mut pool: SlabPool<DefaultSlot<String>, u8> =
-            SlabPool::<DefaultSlot<String>, u8>::new();
+        let mut pool: SlabPool<DefaultSlot<String>, u8> = SlabPool::new();
         assert_eq!(pool.total_slots(), 0);
         assert_eq!(pool.free_slots(), 0);
         assert_eq!(pool.capacity(), 0);
@@ -491,7 +490,7 @@ mod test {
     #[test]
     #[should_panic]
     fn slab_insertion_overflow() {
-        let mut pool: SlabPool<DefaultSlot<usize>, u8> = SlabPool::<DefaultSlot<usize>, u8>::new();
+        let mut pool: SlabPool<DefaultSlot<usize>, u8> = SlabPool::new();
         for i in 0..257 {
             let _ = pool.insert(i);
         }
@@ -634,7 +633,7 @@ mod test {
     #[test]
     #[should_panic]
     fn key_slab_insertion_overflow() {
-        let mut pool: SlabPool<DefaultSlot<usize>, u8> = SlabPool::<DefaultSlot<usize>, u8>::new();
+        let mut pool: SlabPool<DefaultSlot<usize>, u8> = SlabPool::new();
         for i in 0..257 {
             let _ = pool.insert(i);
         }
@@ -702,7 +701,7 @@ mod test {
             }
         }
 
-        let mut pool: SlabPool<DefaultSlot<usize>> = SlabPool::<DefaultSlot<usize>>::new();
+        let mut pool: SlabPool<DefaultSlot<usize>> = SlabPool::new();
         for &event in trace.iter() {
             if event >= 0 {
                 assert_eq!(Ok(event as usize), pool.try_insert(event as usize));
@@ -714,7 +713,7 @@ mod test {
             }
         }
 
-        let mut pool: SlabPool<CloneSlot<usize>> = SlabPool::<CloneSlot<usize>>::new();
+        let mut pool: SlabPool<CloneSlot<usize>> = SlabPool::new();
         for &event in trace.iter() {
             if event >= 0 {
                 assert_eq!(Ok(event as usize), pool.try_insert(event as usize));
@@ -729,7 +728,7 @@ mod test {
 
     #[test]
     fn slab_stack_pool() {
-        let mut pool: SlabPool<DefaultSlot<Vec<u32>>> = SlabPool::<DefaultSlot<Vec<u32>>>::new();
+        let mut pool: SlabPool<DefaultSlot<Vec<u32>>> = SlabPool::new();
         let s1 = pool.insert_empty();
         assert_eq!(s1, 0);
         assert!(pool.key_is_empty(s1));
@@ -756,8 +755,7 @@ mod test {
         assert_eq!(Some((s4, 5)), pool.into_popped(s4));
         assert_eq!(None, pool.into_popped(s4));
 
-        let mut small_pool: SlabPool<DefaultSlot<Vec<u32>>, u8> =
-            SlabPool::<DefaultSlot<Vec<u32>>, u8>::new();
+        let mut small_pool: SlabPool<DefaultSlot<Vec<u32>>, u8> = SlabPool::new();
         for i in 0..=255 {
             assert_eq!(Ok(i), small_pool.try_insert_empty());
         }
@@ -810,8 +808,7 @@ mod test {
 
         assert_eq!(pool.key_capacity(s4), pool.at(s4).capacity());
 
-        let mut small_pool: SlabPool<DefaultSlot<Vec<u32>>, u8> =
-            SlabPool::<DefaultSlot<Vec<u32>>, u8>::new();
+        let mut small_pool: SlabPool<DefaultSlot<Vec<u32>>, u8> = SlabPool::new();
         for i in 0..=255 {
             assert_eq!(Ok(i), small_pool.try_insert_empty());
         }
