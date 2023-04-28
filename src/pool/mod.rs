@@ -10,6 +10,7 @@ use crate::index::ContiguousIx;
 
 pub mod container;
 pub mod slab;
+pub mod slice;
 
 /// A pool which supports inserting values of type `V` for keys of type `K`
 pub trait Insert<K, V> {
