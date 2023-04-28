@@ -8,13 +8,16 @@ use std::{
 
 use crate::{
     index::ContiguousIx,
-    slot::{InitFrom, KeySlot, RemoveSlot, Slot, SlotMut, SlotRef},
+    slot::{InitFrom, Slot, SlotMut, SlotRef},
 };
 
 use super::{
     container::{array::InsertFromSlice, Container, InsertEmpty, InsertWithCapacity, WithCapacity},
     GetMut, GetRef, Insert, ObjectPool, Pool, Take,
 };
+
+mod free;
+pub use free::*;
 
 /// A simple slab allocator supporting recycling of objects with a free-list
 ///
@@ -27,12 +30,13 @@ use super::{
 /// The implementation of comparison will consider any two pools constructed by the same sequence of `insert` and `remove`/`delete` operations equivalent, but
 /// may consider two pools which map the same keys to the same values but were constructed by a different sequence of operations to be disequal.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SlabPool<S, K = usize> {
+pub struct SlabPool<S, K = usize, F = KeyList<K>> {
     pool: Vec<S>,
-    free_list: Vec<K>,
+    free_list: F,
+    key_type: PhantomData<K>,
 }
 
-impl<S, K> Index<K> for SlabPool<S, K>
+impl<S, K, F> Index<K> for SlabPool<S, K, F>
 where
     S: SlotRef,
     K: ContiguousIx,
@@ -45,7 +49,7 @@ where
     }
 }
 
-impl<S, K> IndexMut<K> for SlabPool<S, K>
+impl<S, K, F> IndexMut<K> for SlabPool<S, K, F>
 where
     S: SlotMut + SlotRef,
     K: ContiguousIx,
@@ -56,15 +60,23 @@ where
     }
 }
 
-impl<S, K> SlabPool<S, K>
+impl<S, K, F> SlabPool<S, K, F>
 where
     S: Slot,
     K: ContiguousIx,
+    F: FreeList<[S], K>,
 {
     /// Create a new, empty pool
     #[cfg_attr(not(tarpaulin), inline(always))]
-    pub fn new() -> SlabPool<S, K> {
-        Self::with_capacity(0, 0)
+    pub fn new() -> SlabPool<S, K, F>
+    where
+        F: Default,
+    {
+        SlabPool {
+            pool: Vec::new(),
+            free_list: F::default(),
+            key_type: PhantomData,
+        }
     }
 
     /// Get a reference to a given slot
@@ -89,14 +101,14 @@ where
         self.pool.get_mut(key.index())
     }
 
-    /// Create a new, empty pool with the given capacity
-    #[cfg_attr(not(tarpaulin), inline)]
-    pub fn with_capacity(capacity: usize, free_capacity: usize) -> SlabPool<S, K> {
-        SlabPool {
-            pool: Vec::with_capacity(capacity),
-            free_list: Vec::with_capacity(free_capacity),
-        }
-    }
+    // /// Create a new, empty pool with the given capacity
+    // #[cfg_attr(not(tarpaulin), inline)]
+    // pub fn with_capacity(capacity: usize, free_capacity: usize) -> SlabPool<S, K> {
+    //     SlabPool {
+    //         pool: Vec::with_capacity(capacity),
+    //         free_list: Vec::with_capacity(free_capacity),
+    //     }
+    // }
 
     /// Get the total capacity of this pool
     #[cfg_attr(not(tarpaulin), inline)]
@@ -114,21 +126,27 @@ where
     ///
     /// Note this is less than or equal to the free capacity
     #[cfg_attr(not(tarpaulin), inline)]
-    pub fn free_slots(&self) -> usize {
-        self.free_list.len()
+    pub fn free_slots(&self) -> usize
+    where
+        F: FreeListCapacity<[S], K>,
+    {
+        self.free_list.len(&self.pool)
     }
 
     /// Get the free capacity of this pool. May take time linear in the size of the pool.
     #[cfg_attr(not(tarpaulin), inline)]
-    pub fn free_capacity(&self) -> usize {
+    pub fn free_capacity(&self) -> usize
+    where
+        F: FreeListCapacity<[S], K>,
+    {
         self.free_slots() + self.capacity() - self.total_slots()
     }
 
     /// Remove all entries from this pool, preserving its current capacity
     #[cfg_attr(not(tarpaulin), inline)]
     pub fn clear(&mut self) {
+        self.free_list.clear(&mut self.pool);
         self.pool.clear();
-        self.free_list.clear();
     }
 
     /// Reserves capacity for at least `additional` more elements to be inserted
@@ -137,33 +155,37 @@ where
         self.pool.reserve(additional)
     }
 
-    /// Reserves capacity for at least `additional` more elements to be free'd
-    #[cfg_attr(not(tarpaulin), inline)]
-    pub fn reserve_free(&mut self, additional: usize) {
-        self.free_list.reserve(additional)
-    }
+    // /// Reserves capacity for at least `additional` more elements to be free'd
+    // #[cfg_attr(not(tarpaulin), inline)]
+    // pub fn reserve_free(&mut self, additional: usize) {
+    //     self.free_list.reserve(additional)
+    // }
 
     /// Shrink this pool's capacity as much as possible without changing any indices
     #[cfg_attr(not(tarpaulin), inline)]
     pub fn shrink_to_fit(&mut self) {
         self.pool.shrink_to_fit();
-        self.free_list.shrink_to_fit();
+        // self.free_list.shrink_to_fit();
     }
 
     /// Get the key that will be assigned to the next inserted value, or `None` if inserting a new value would cause the pool to overflow
     #[cfg_attr(not(tarpaulin), inline(always))]
-    pub fn next_key(&self) -> Option<K> {
-        self.free_list
-            .last()
-            .copied()
-            .or(K::try_new(self.pool.len()))
+    pub fn next_key(&self) -> Option<K>
+    where
+        F: NextFreeList<[S], K>,
+    {
+        if let Some(next_free) = self.free_list.next_free(&self.pool) {
+            return Some(next_free);
+        }
+        K::try_new(self.pool.len())
     }
 }
 
-impl<S, K, V> Insert<K, V> for SlabPool<S, K>
+impl<S, K, V, F> Insert<K, V> for SlabPool<S, K, F>
 where
     S: Slot + InitFrom<V>,
     K: ContiguousIx,
+    F: FreeList<[S], K>,
 {
     #[inline]
     fn insert(&mut self, v: V) -> K {
@@ -178,7 +200,7 @@ where
 
     #[inline]
     fn try_insert(&mut self, v: V) -> Result<K, V> {
-        if let Some(free) = self.free_list.pop() {
+        if let Some(free) = self.free_list.alloc(&mut self.pool) {
             self.pool[free.index()].set_value(v);
             Ok(free)
         } else if let Some(ix) = K::try_new(self.pool.len()) {
@@ -190,15 +212,16 @@ where
     }
 }
 
-impl<S, K> InsertEmpty<K> for SlabPool<S, K>
+impl<S, K, F> InsertEmpty<K> for SlabPool<S, K, F>
 where
     S: Slot,
     S::Value: Container + Default,
     K: ContiguousIx,
+    F: FreeList<[S], K>,
 {
     #[inline]
     fn try_insert_empty(&mut self) -> Result<K, ()> {
-        if let Some(free) = self.free_list.pop() {
+        if let Some(free) = self.free_list.alloc(&mut self.pool) {
             self.pool[free.index()].set_default_value();
             Ok(free)
         } else if let Some(ix) = K::try_new(self.pool.len()) {
@@ -211,7 +234,7 @@ where
 
     #[inline]
     fn insert_unique_empty(&mut self) -> Result<K, ()> {
-        if let Some(free) = self.free_list.pop() {
+        if let Some(free) = self.free_list.alloc(&mut self.pool) {
             self.pool[free.index()].set_default_value();
             Ok(free)
         } else if let Some(ix) = K::try_new(self.pool.len()) {
@@ -223,11 +246,12 @@ where
     }
 }
 
-impl<S, K, C> InsertWithCapacity<K, C> for SlabPool<S, K>
+impl<S, K, C, F> InsertWithCapacity<K, C> for SlabPool<S, K, F>
 where
     S: Slot,
     S::Value: Container + WithCapacity<C>,
     K: ContiguousIx,
+    F: FreeList<[S], K>,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn insert_with_capacity(&mut self, capacity: C) -> K {
@@ -241,12 +265,13 @@ where
     }
 }
 
-impl<'a, S, K> InsertFromSlice<'a, K> for SlabPool<S, K>
+impl<'a, S, K, F> InsertFromSlice<'a, K> for SlabPool<S, K, F>
 where
-    S: RemoveSlot,
+    S: Slot,
     S::Value: Container + From<&'a [Self::Elem]>,
     Self::Elem: 'a,
     K: ContiguousIx,
+    F: FreeList<[S], K>,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn insert_from_slice(&mut self, slice: &'a [Self::Elem]) -> K {
@@ -254,399 +279,48 @@ where
     }
 }
 
-impl<S, K> Pool<K> for SlabPool<S, K>
+impl<S, K, F> Pool<K> for SlabPool<S, K, F>
 where
-    S: RemoveSlot,
     K: ContiguousIx,
+    F: FreeList<[S], K>,
 {
-    #[inline]
+    #[cfg_attr(not(tarpaulin), inline(always))]
     fn delete(&mut self, key: K) {
-        self.pool[key.index()].delete_value();
-        self.free_list.push(key)
+        self.free_list.delete(key, &mut self.pool);
     }
 }
 
-impl<S, K> ObjectPool<K> for SlabPool<S, K>
+impl<S, K, F> ObjectPool<K> for SlabPool<S, K, F>
 where
-    S: RemoveSlot,
+    S: Slot,
     K: ContiguousIx,
+    F: FreeList<[S], K>,
 {
     type Object = S::Value;
 }
 
-impl<S, K> Take<K, S::Value> for SlabPool<S, K>
+impl<S, K, F> Take<K, S::Value> for SlabPool<S, K, F>
 where
-    S: RemoveSlot,
+    S: Slot,
     K: ContiguousIx,
+    F: RemovalList<[S], K, Value = S::Value>,
 {
     #[inline]
     fn try_take(&mut self, key: K) -> Option<S::Value> {
-        let result = self.pool[key.index()].try_remove_value()?;
-        self.free_list.push(key);
-        Some(result)
+        self.free_list.try_remove(key, &mut self.pool)
     }
 
     #[inline]
     fn take(&mut self, key: K) -> S::Value {
-        let result = self.pool[key.index()].remove_value();
-        self.free_list.push(key);
-        result
+        self.free_list.remove(key, &mut self.pool)
     }
 }
 
-impl<S, K> GetRef<K, S::Value> for SlabPool<S, K>
-where
-    S: RemoveSlot + SlotRef,
-    K: ContiguousIx,
-{
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_at(&self, key: K) -> Option<&S::Value> {
-        self.pool.get(key.index())?.try_value()
-    }
-
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    fn at(&self, key: K) -> &S::Value {
-        self.pool[key.index()].value()
-    }
-}
-
-impl<S, K> GetMut<K, S::Value> for SlabPool<S, K>
-where
-    S: RemoveSlot + SlotMut,
-    K: ContiguousIx,
-{
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_at_mut(&mut self, key: K) -> Option<&mut S::Value> {
-        self.pool.get_mut(key.index())?.try_value_mut()
-    }
-
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    fn at_mut(&mut self, key: K) -> &mut S::Value {
-        self.pool[key.index()].value_mut()
-    }
-}
-
-/// A simple slab allocator supporting recycling of objects with an intrusive free-list
-///
-/// Allocates indices of type `K` corresponding to slots of type `S`
-///
-/// For a non-intrusive free-list based approach, consider [`SlabPool`]
-///
-/// # Notes
-///
-/// The implementation of comparison will consider any two pools constructed by the same sequence of `insert` and `remove`/`delete` operations equivalent, but
-/// may consider two pools which map the same keys to the same values but were constructed by a different sequence of operations to be disequal.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct KeySlabPool<S, K = usize> {
-    pool: Vec<S>,
-    free_head: usize,
-    phantom_free: PhantomData<K>,
-}
-
-impl<S, K> Index<K> for KeySlabPool<S, K>
+impl<S, K, F> GetRef<K, S::Value> for SlabPool<S, K, F>
 where
     S: SlotRef,
     K: ContiguousIx,
 {
-    type Output = S::Value;
-
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    fn index(&self, index: K) -> &Self::Output {
-        self.pool[index.index()].value()
-    }
-}
-
-impl<S, K> IndexMut<K> for KeySlabPool<S, K>
-where
-    S: SlotMut + SlotRef,
-    K: ContiguousIx,
-{
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    fn index_mut(&mut self, index: K) -> &mut Self::Output {
-        self.pool[index.index()].value_mut()
-    }
-}
-
-impl<S, K> KeySlabPool<S, K>
-where
-    S: KeySlot<K>,
-    K: ContiguousIx,
-{
-    /// Create a new, empty pool
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    pub fn new() -> KeySlabPool<S, K> {
-        Self::with_capacity(0)
-    }
-
-    /// Get a reference to a given slot
-    ///
-    /// Note this may expose unstable internal details of the pool data structure when used on a key which has been deleted.
-    /// Using interior mutability to modify the slot corresponding to a deleted key leaves the pool in an invalid state, though this will never cause UB.
-    ///
-    /// Returns `None` if `key` is invalid
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    pub fn get_slot(&self, key: K) -> Option<&S> {
-        self.pool.get(key.index())
-    }
-
-    /// Get a mutable reference to a given slot
-    ///
-    /// Note this may expose unstable internal details of the pool data structure when used on a key which has been deleted.
-    /// Modifying the slot corresponding to a deleted key leaves the pool in an invalid state, though this will never cause UB.
-    ///
-    /// Returns `None` if `key` is invalid
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    pub fn get_slot_mut(&mut self, key: K) -> Option<&mut S> {
-        self.pool.get_mut(key.index())
-    }
-
-    /// Create a new, empty pool with the given capacity
-    #[cfg_attr(not(tarpaulin), inline)]
-    pub fn with_capacity(capacity: usize) -> KeySlabPool<S, K> {
-        KeySlabPool {
-            pool: Vec::with_capacity(capacity),
-            free_head: 0,
-            phantom_free: PhantomData,
-        }
-    }
-
-    /// Get the total capacity of this pool
-    #[cfg_attr(not(tarpaulin), inline)]
-    pub fn capacity(&self) -> usize {
-        self.pool.capacity()
-    }
-
-    /// Get the total number of slots in this pool
-    #[cfg_attr(not(tarpaulin), inline)]
-    pub fn total_slots(&self) -> usize {
-        self.pool.len()
-    }
-
-    /// Get the number of free slots in this pool. May take time linear in the size of the pool.
-    ///
-    /// Note this is less than or equal to the free capacity
-    #[cfg_attr(not(tarpaulin), inline)]
-    pub fn free_slots(&self) -> usize {
-        let mut curr = self.free_head;
-        let mut count = 0;
-        while let Some(ix) = self.pool.get(curr) {
-            count += 1;
-            let next = ix.key().index();
-            if next == curr {
-                break;
-            }
-            curr = next;
-        }
-        count
-    }
-
-    /// Get the free capacity of this pool. May take time linear in the size of the pool.
-    #[cfg_attr(not(tarpaulin), inline)]
-    pub fn free_capacity(&self) -> usize {
-        self.free_slots() + self.capacity() - self.total_slots()
-    }
-
-    /// Remove all entries from this pool, preserving its current capacity
-    #[cfg_attr(not(tarpaulin), inline)]
-    pub fn clear(&mut self) {
-        self.pool.clear();
-        self.free_head = 0;
-    }
-
-    /// Reserves capacity for at least `additional` more elements to be inserted
-    #[cfg_attr(not(tarpaulin), inline)]
-    pub fn reserve(&mut self, additional: usize) {
-        self.pool.reserve(additional)
-    }
-
-    /// Shrink this pool's capacity as much as possible without changing any indices
-    #[cfg_attr(not(tarpaulin), inline)]
-    pub fn shrink_to_fit(&mut self) {
-        self.pool.shrink_to_fit();
-    }
-
-    /// Get the key that will be assigned to the next inserted value, or `None` if inserting a new value would cause the pool to overflow
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    pub fn next_key(&self) -> Option<K> {
-        K::try_new(self.free_head)
-    }
-}
-
-impl<S, K, V> Insert<K, V> for KeySlabPool<S, K>
-where
-    S: KeySlot<K> + InitFrom<V>,
-    K: ContiguousIx,
-{
-    #[inline]
-    fn insert(&mut self, v: V) -> K {
-        match self.try_insert(v) {
-            Ok(k) => k,
-            Err(_) => panic!(
-                "Slab mapping out of space: current size {:?}",
-                self.pool.len()
-            ),
-        }
-    }
-
-    #[inline]
-    fn try_insert(&mut self, v: V) -> Result<K, V> {
-        let Some(key) = self.next_key() else { return Err(v) };
-        self.free_head = if let Some(value) = self.pool.get_mut(self.free_head) {
-            let key = value.key();
-            value.set_value(v);
-            let ki = key.index();
-            if self.free_head == ki {
-                self.pool.len()
-            } else {
-                ki
-            }
-        } else {
-            self.pool.push(S::from_value(v));
-            self.pool.len()
-        };
-        Ok(key)
-    }
-}
-
-impl<S, K> InsertEmpty<K> for KeySlabPool<S, K>
-where
-    S: KeySlot<K>,
-    S::Value: Container + Default,
-    K: ContiguousIx,
-{
-    #[inline]
-    fn try_insert_empty(&mut self) -> Result<K, ()> {
-        let Some(key) = self.next_key() else { return Err(()) };
-        self.free_head = if let Some(value) = self.pool.get_mut(self.free_head) {
-            let key = value.key();
-            value.set_default_value();
-            let ki = key.index();
-            if self.free_head == ki {
-                self.pool.len()
-            } else {
-                ki
-            }
-        } else {
-            self.pool.push(S::default_value());
-            self.pool.len()
-        };
-        Ok(key)
-    }
-
-    #[inline]
-    fn insert_unique_empty(&mut self) -> Result<K, ()> {
-        let Some(key) = self.next_key() else { return Err(()) };
-        self.free_head = if let Some(value) = self.pool.get_mut(self.free_head) {
-            let key = value.key();
-            value.set_default_value();
-            let ki = key.index();
-            if self.free_head == ki {
-                self.pool.len()
-            } else {
-                ki
-            }
-        } else {
-            self.pool.push(S::default_value());
-            self.pool.len()
-        };
-        Ok(key)
-    }
-}
-
-impl<S, K, C> InsertWithCapacity<K, C> for KeySlabPool<S, K>
-where
-    S: KeySlot<K>,
-    S::Value: Container + WithCapacity<C>,
-    K: ContiguousIx,
-{
-    #[inline]
-    fn insert_with_capacity(&mut self, capacity: C) -> K {
-        self.insert(WithCapacity::new_with_capacity(capacity))
-    }
-
-    #[inline]
-    fn try_insert_with_capacity(&mut self, capacity: C) -> Result<K, ()> {
-        self.try_insert(WithCapacity::new_with_capacity(capacity))
-            .map_err(|_| ())
-    }
-}
-
-impl<'a, S, K> InsertFromSlice<'a, K> for KeySlabPool<S, K>
-where
-    S: KeySlot<K>,
-    S::Value: Container + From<&'a [Self::Elem]>,
-    Self::Elem: 'a,
-    K: ContiguousIx,
-{
-    #[cfg_attr(not(tarpaulin), inline(always))]
-    fn insert_from_slice(&mut self, slice: &'a [Self::Elem]) -> K {
-        self.insert(slice.into())
-    }
-}
-
-impl<S, K> Pool<K> for KeySlabPool<S, K>
-where
-    S: KeySlot<K>,
-    K: ContiguousIx,
-{
-    #[inline]
-    fn delete(&mut self, key: K) {
-        let f = if self.free_head < self.pool.len() {
-            K::new(self.free_head)
-        } else {
-            key
-        };
-        let ki = key.index();
-        self.pool[ki].set_key(f);
-        self.free_head = ki;
-    }
-}
-
-impl<S, K> ObjectPool<K> for KeySlabPool<S, K>
-where
-    S: KeySlot<K>,
-    K: ContiguousIx,
-{
-    type Object = S::Value;
-}
-
-impl<S, K> Take<K, S::Value> for KeySlabPool<S, K>
-where
-    S: KeySlot<K>,
-    K: ContiguousIx,
-{
-    #[inline]
-    fn try_take(&mut self, key: K) -> Option<S::Value> {
-        let f = if self.free_head < self.pool.len() {
-            K::new(self.free_head)
-        } else {
-            key
-        };
-        let ki = key.index();
-        let result = self.pool.get_mut(ki)?.try_swap_key(f)?;
-        self.free_head = ki;
-        Some(result)
-    }
-
-    #[inline]
-    fn take(&mut self, key: K) -> S::Value {
-        let f = if self.free_head < self.pool.len() {
-            K::new(self.free_head)
-        } else {
-            key
-        };
-        let ki = key.index();
-        let result = self.pool[ki].swap_key(f);
-        self.free_head = ki;
-        result
-    }
-}
-
-impl<S, K> GetRef<K, S::Value> for KeySlabPool<S, K>
-where
-    S: SlotRef + KeySlot<K>,
-    K: ContiguousIx,
-{
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn try_at(&self, key: K) -> Option<&S::Value> {
         self.pool.get(key.index())?.try_value()
@@ -658,9 +332,9 @@ where
     }
 }
 
-impl<S, K> GetMut<K, S::Value> for KeySlabPool<S, K>
+impl<S, K, F> GetMut<K, S::Value> for SlabPool<S, K, F>
 where
-    S: SlotMut + KeySlot<K>,
+    S: SlotMut,
     K: ContiguousIx,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
@@ -673,6 +347,8 @@ where
         self.pool[key.index()].value_mut()
     }
 }
+
+pub type KeySlabPool<S, K = usize> = SlabPool<S, K, IntrusiveFree>;
 
 #[cfg(test)]
 mod test {
