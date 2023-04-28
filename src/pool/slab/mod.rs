@@ -16,8 +16,8 @@ use super::{
     GetMut, GetRef, Insert, ObjectPool, Pool, Take,
 };
 
-mod free;
-pub use free::*;
+pub mod free;
+use free::*;
 
 /// A simple slab allocator supporting recycling of objects with a free-list
 ///

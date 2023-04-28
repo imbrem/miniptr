@@ -1,44 +1,44 @@
 /*!
-A free list implementation over a buffer of slots
+A free list implementation for a slab allocator
 */
 use crate::{
     index::ContiguousIx,
     slot::{KeySlot, RemoveSlot},
 };
 
-/// A free list implementation over a buffer of slots
+/// A free list implementation over a backing of slots
 pub trait FreeList<B: ?Sized, K> {
-    /// Allocate a slot in the buffer, returning it's index
+    /// Allocate a slot in the backing, returning it's index
     ///
     /// Returns `None` on failure
     #[must_use]
-    fn alloc(&mut self, buffer: &mut B) -> Option<K>;
+    fn alloc(&mut self, backing: &mut B) -> Option<K>;
 
-    /// Deallocate a slot in the buffer, putting it on the free list
+    /// Deallocate a slot in the backing, putting it on the free list
     ///
-    /// If the slot has not been previously alloc'ed or placed into the buffer as a valid key, the behaviour is unspecified.
-    fn delete(&mut self, key: K, buffer: &mut B);
+    /// If the slot has not been previously alloc'ed or placed into the backing as a valid key, the behaviour is unspecified.
+    fn delete(&mut self, key: K, backing: &mut B);
 
     /// Clear this free list, resetting it
-    fn clear(&mut self, buffer: &mut B);
+    fn clear(&mut self, backing: &mut B);
 }
 
 /// A free list implementation which allows the removal of values
 pub trait RemovalList<B: ?Sized, K>: FreeList<B, K> {
     type Value;
 
-    /// Deallocate a slot in the buffer, putting it on the free list and returning it's value
+    /// Deallocate a slot in the backing, putting it on the free list and returning it's value
     ///
-    /// If the slot has not been previously alloc'ed or placed into the buffer as a valid key, the behaviour is unspecified.
+    /// If the slot has not been previously alloc'ed or placed into the backing as a valid key, the behaviour is unspecified.
     #[must_use]
-    fn try_remove(&mut self, key: K, buffer: &mut B) -> Option<Self::Value>;
+    fn try_remove(&mut self, key: K, backing: &mut B) -> Option<Self::Value>;
 
-    /// Deallocate a slot in the buffer, putting it on the free list and returning it's value
+    /// Deallocate a slot in the backing, putting it on the free list and returning it's value
     ///
-    /// If the slot has not been previously alloc'ed or placed into the buffer as a valid key, the behaviour is unspecified.
+    /// If the slot has not been previously alloc'ed or placed into the backing as a valid key, the behaviour is unspecified.
     #[must_use]
-    fn remove(&mut self, key: K, buffer: &mut B) -> Self::Value {
-        self.try_remove(key, buffer).expect("remove to succeed")
+    fn remove(&mut self, key: K, backing: &mut B) -> Self::Value {
+        self.try_remove(key, backing).expect("remove to succeed")
     }
 }
 
@@ -46,16 +46,16 @@ pub trait RemovalList<B: ?Sized, K>: FreeList<B, K> {
 pub trait NextFreeList<B: ?Sized, K>: FreeList<B, K> {
     /// Get the next free slot in the list
     ///
-    /// The returned index should be free, and the next call to `alloc` should return this index unless the free list or buffer have been modified in the meantime
+    /// The returned index should be free, and the next call to `alloc` should return this index unless the free list or backing have been modified in the meantime
     #[must_use]
-    fn next_free(&self, buffer: &B) -> Option<K>;
+    fn next_free(&self, backing: &B) -> Option<K>;
 }
 
 /// A free list which supports querying it's capacity
 pub trait FreeListCapacity<B: ?Sized, K>: FreeList<B, K> {
     /// Get the number of slots in this free list
     #[must_use]
-    fn len(&self, buffer: &B) -> usize;
+    fn len(&self, backing: &B) -> usize;
 }
 
 /// A simple free list consisting of a vector of free keys
@@ -77,20 +77,20 @@ where
     K: ContiguousIx,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn alloc(&mut self, _buffer: &mut [S]) -> Option<K> {
+    fn alloc(&mut self, _backing: &mut [S]) -> Option<K> {
         self.0.pop()
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn delete(&mut self, key: K, buffer: &mut [S]) {
-        if let Some(slot) = buffer.get_mut(key.index()) {
+    fn delete(&mut self, key: K, backing: &mut [S]) {
+        if let Some(slot) = backing.get_mut(key.index()) {
             slot.delete_value();
             self.0.push(key);
         }
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn clear(&mut self, _buffer: &mut [S]) {
+    fn clear(&mut self, _backing: &mut [S]) {
         self.0.clear()
     }
 }
@@ -102,14 +102,14 @@ where
 {
     type Value = S::Value;
 
-    fn try_remove(&mut self, key: K, buffer: &mut [S]) -> Option<S::Value> {
-        let value = buffer.get_mut(key.index())?.try_remove_value()?;
+    fn try_remove(&mut self, key: K, backing: &mut [S]) -> Option<S::Value> {
+        let value = backing.get_mut(key.index())?.try_remove_value()?;
         self.0.push(key);
         Some(value)
     }
 
-    fn remove(&mut self, key: K, buffer: &mut [S]) -> S::Value {
-        let value = buffer[key.index()].remove_value();
+    fn remove(&mut self, key: K, backing: &mut [S]) -> S::Value {
+        let value = backing[key.index()].remove_value();
         self.0.push(key);
         value
     }
@@ -121,7 +121,7 @@ where
     K: ContiguousIx,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn next_free(&self, _buffer: &[S]) -> Option<K> {
+    fn next_free(&self, _backing: &[S]) -> Option<K> {
         self.0.last().cloned()
     }
 }
@@ -132,7 +132,7 @@ where
     K: ContiguousIx,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn len(&self, _buffer: &[S]) -> usize {
+    fn len(&self, _backing: &[S]) -> usize {
         self.0.len()
     }
 }
@@ -158,8 +158,8 @@ where
     K: ContiguousIx,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn alloc(&mut self, buffer: &mut [S]) -> Option<K> {
-        let slot = buffer.get_mut(self.free_head)?;
+    fn alloc(&mut self, backing: &mut [S]) -> Option<K> {
+        let slot = backing.get_mut(self.free_head)?;
         let key = slot.key().index();
         let old = self.free_head;
         self.free_head = if key == self.free_head {
@@ -171,16 +171,16 @@ where
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn delete(&mut self, key: K, buffer: &mut [S]) {
+    fn delete(&mut self, key: K, backing: &mut [S]) {
         let ix = key.index();
-        if let Some(slot) = buffer.get_mut(ix) {
+        if let Some(slot) = backing.get_mut(ix) {
             slot.set_key(K::try_new(self.free_head).unwrap_or(key));
             self.free_head = ix;
         }
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn clear(&mut self, _buffer: &mut [S]) {
+    fn clear(&mut self, _backing: &mut [S]) {
         self.free_head = usize::MAX
     }
 }
@@ -193,9 +193,9 @@ where
     type Value = S::Value;
 
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn try_remove(&mut self, key: K, buffer: &mut [S]) -> Option<S::Value> {
+    fn try_remove(&mut self, key: K, backing: &mut [S]) -> Option<S::Value> {
         let ix = key.index();
-        let value = buffer
+        let value = backing
             .get_mut(ix)?
             .try_swap_key(K::try_new(self.free_head).unwrap_or(key))?;
         self.free_head = ix;
@@ -203,9 +203,9 @@ where
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn remove(&mut self, key: K, buffer: &mut [S]) -> S::Value {
+    fn remove(&mut self, key: K, backing: &mut [S]) -> S::Value {
         let ix = key.index();
-        let value = buffer
+        let value = backing
             .get_mut(ix)
             .expect("key to be valid")
             .swap_key(K::try_new(self.free_head).unwrap_or(key));
@@ -220,7 +220,7 @@ where
     K: ContiguousIx,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn next_free(&self, _buffer: &[S]) -> Option<K> {
+    fn next_free(&self, _backing: &[S]) -> Option<K> {
         K::try_new(self.free_head)
     }
 }
@@ -231,10 +231,10 @@ where
     K: ContiguousIx,
 {
     #[cfg_attr(not(tarpaulin), inline(always))]
-    fn len(&self, buffer: &[S]) -> usize {
+    fn len(&self, backing: &[S]) -> usize {
         let mut len = 0;
         let mut curr = self.free_head;
-        while let Some(slot) = buffer.get(curr) {
+        while let Some(slot) = backing.get(curr) {
             len += 1;
             let key = slot.key().index();
             if key == curr {
