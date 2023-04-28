@@ -61,7 +61,7 @@ fn pool_benchmark(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::new("default", size), &size, |b, _| {
             b.iter(|| {
-                let mut pool: SlabPool<DefaultSlot<usize>> = SlabPool::new();
+                let mut pool: SlabPool<DefaultSlot<usize>> = SlabPool::<DefaultSlot<usize>>::new();
                 for &event in trace.iter() {
                     if event >= 0 {
                         black_box(pool.insert(event as usize));
