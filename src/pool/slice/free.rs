@@ -31,6 +31,49 @@ pub struct IntrusiveClasses<S> {
     size_classes: S,
 }
 
+impl<S> IntrusiveClasses<S>
+where
+    S: SizeClasses,
+{
+    #[inline]
+    pub fn alloc_size_class<K, T>(&mut self, size_class: u32, backing: &mut [T]) -> Option<Alloc<K>>
+    where
+        K: ContiguousIx,
+        T: KeySlot<K>,
+    {
+        if size_class == 0 {
+            return None;
+        }
+        let capacity = self.size_classes.capacity(size_class);
+        let (next_index, free_head) =
+            if let Some(slot) = backing.get(*self.free_heads.get(size_class as usize - 1)?) {
+                (slot.key().index(), self.free_heads[size_class as usize - 1])
+            } else {
+                debug_assert_eq!(self.free_heads[size_class as usize - 1], usize::MAX);
+                let upper_class = self.size_classes.split_size_class(size_class)?;
+                let size_class_alloc = self.alloc_size_class(upper_class, backing)?;
+                let begin = size_class_alloc.0.index();
+                let slack = Alloc(K::new_unchecked(begin + capacity), size_class_alloc.1);
+                self.dealloc(slack, backing);
+                (self.free_heads[size_class as usize - 1], begin)
+            };
+        if next_index == free_head {
+            if size_class as usize == self.free_heads.len() {
+                self.free_heads.pop();
+            } else {
+                self.free_heads[size_class as usize - 1] = usize::MAX
+            }
+        } else {
+            self.free_heads[size_class as usize - 1] = next_index
+        };
+        let result = Some(Alloc(
+            K::new_unchecked(free_head),
+            K::new_unchecked(free_head + capacity),
+        ));
+        result
+    }
+}
+
 impl<K, S, T> FreeLists<[T], K> for IntrusiveClasses<S>
 where
     K: ContiguousIx,
@@ -40,33 +83,28 @@ where
     #[inline]
     fn alloc(&mut self, capacity: usize, backing: &mut [T]) -> Option<Alloc<K>> {
         let size_class = self.size_classes.size_class_containing(capacity);
-        let free_head = self.free_heads.get_mut(size_class as usize)?;
-        let ix = free_head.index();
-        let next_free = backing.get(ix)?.key();
-        let next_index = next_free.index();
-        let old_free_head = *free_head;
-        let size_class_capacity = self.size_classes.capacity(size_class);
-        *free_head = if next_index == old_free_head {
-            usize::MAX
-        } else {
-            next_index
-        };
-        Some(Alloc(
-            K::new_unchecked(old_free_head),
-            K::new_unchecked(old_free_head + size_class_capacity),
-        ))
+        self.alloc_size_class(size_class, backing)
     }
 
     #[inline]
     fn dealloc(&mut self, alloc: Alloc<K>, backing: &mut [T]) {
-        let size_class = self
-            .size_classes
-            .size_class_contained(alloc.1.index() - alloc.0.index());
-        self.free_heads.resize(size_class as usize + 1, usize::MAX);
-        let old_free_head = self.free_heads[size_class as usize];
+        let begin = alloc.0.index();
+        let end = alloc.1.index();
+        let size_class = self.size_classes.size_class_contained(end - begin);
+        if size_class == 0 {
+            return; //TODO: optimize
+        }
+        let new_len = size_class as usize;
+        if self.free_heads.len() < new_len {
+            self.free_heads.resize(new_len, usize::MAX);
+        }
+        let old_free_head = self.free_heads[size_class as usize - 1];
         let new_free_head = alloc.0.index();
         backing[new_free_head].set_key(K::try_new(old_free_head).unwrap_or(alloc.0));
-        self.free_heads[size_class as usize] = new_free_head;
+        self.free_heads[size_class as usize - 1] = new_free_head;
+        let begin_slack = begin + self.size_classes.capacity(size_class);
+        let slack = Alloc(K::new_unchecked(begin_slack), alloc.1);
+        self.dealloc(slack, backing)
     }
 
     #[inline]
@@ -79,9 +117,12 @@ where
 pub trait SizeClasses {
     /// Get the index of the smallest size class containing this capacity
     ///
+    /// Returns `0` for capacity `0`
     /// Returns `u32::MAX` if there is no matching size class
     fn size_class_containing(&self, capacity: usize) -> u32;
     /// Get the index of the largest size class contained within this capacity
+    ///
+    /// Returns `0` for capacity `0`
     fn size_class_contained(&self, capacity: usize) -> u32;
     /// Get the index of the size class corresponding *exactly* to this capacity
     ///
@@ -110,12 +151,12 @@ pub trait SizeClasses {
     /// - Equal to `self.capacity(self.size_class_contained(capacity))`
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn round_down_capacity(&self, capacity: usize) -> usize {
-        let rounded = self.capacity(self.size_class_contained(capacity));
-        if capacity >= rounded {
-            rounded
-        } else {
-            0
-        }
+        self.capacity(self.size_class_contained(capacity))
+    }
+    /// Return the smallest size class that can be split into efficiently into this size class
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn split_size_class(&self, _size_class: u32) -> Option<u32> {
+        None
     }
 }
 
@@ -134,16 +175,24 @@ impl<const N: usize, const B: usize> SizeClasses for Exp2Size<N, B> {
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn size_class_contained(&self, capacity: usize) -> u32 {
         //TODO: optimize
-        if capacity == 0 {
+        if capacity < (1usize << B) {
             return 0;
         }
-        capacity.ilog2().saturating_sub(B as u32) / N as u32
+        1 + capacity.ilog2().saturating_sub(B as u32) / N as u32
     }
 
     #[cfg_attr(not(tarpaulin), inline(always))]
     fn capacity(&self, size_class: u32) -> usize {
-        //TODO: optimize
-        1usize << (B as u32 + size_class * N as u32)
+        if size_class == 0 {
+            0
+        } else {
+            1usize << (B as u32 + (size_class - 1) * N as u32)
+        }
+    }
+
+    #[cfg_attr(not(tarpaulin), inline(always))]
+    fn split_size_class(&self, size_class: u32) -> Option<u32> {
+        Some(size_class + 1)
     }
 }
 
@@ -155,18 +204,23 @@ mod test {
     fn free_list_alloc() {
         let mut classes = IntrusiveClasses::<Exp2Size<1, 2>>::default();
         let mut backing = [0; 1024];
+        assert_eq!(classes.alloc(0, &mut backing), None::<Alloc<u32>>);
         assert_eq!(classes.alloc(4, &mut backing), None::<Alloc<u32>>);
         classes.dealloc(Alloc(0, 4), &mut backing);
         assert_eq!(classes.alloc(8, &mut backing), None::<Alloc<u32>>);
         assert_eq!(classes.alloc(2, &mut backing), Some(Alloc(0, 4)));
         assert_eq!(classes.alloc(4, &mut backing), None::<Alloc<u32>>);
-        classes.dealloc(Alloc(0, 7), &mut backing); //Note: memory in 4..7 is leaked!
+        classes.dealloc(Alloc(0, 7), &mut backing); //Note: memory in 4..7 is leaked, since it can't fit into the smallest size class
         classes.dealloc(Alloc(8, 12), &mut backing);
-        classes.dealloc(Alloc(12, 24), &mut backing); //Note: memory in 20..24 is leaked!
+        classes.dealloc(Alloc(12, 24), &mut backing); //Note: memory in 20..24 is *not* leaked, since it fits in a smaller size class
+        assert_eq!(classes.alloc(2, &mut backing), Some(Alloc(20, 24)));
         assert_eq!(classes.alloc(2, &mut backing), Some(Alloc(8, 12)));
         assert_eq!(classes.alloc(3, &mut backing), Some(Alloc(0, 4)));
-        assert_eq!(classes.alloc(4, &mut backing), None::<Alloc<u32>>); // No splitting 12..20 to 12..16 and 16..20, yet
         assert_eq!(classes.alloc(8, &mut backing), Some(Alloc(12, 20)));
+        assert_eq!(classes.alloc(3, &mut backing), None::<Alloc<u32>>);
+        classes.dealloc(Alloc(12, 20), &mut backing);
+        assert_eq!(classes.alloc(3, &mut backing), Some(Alloc(12, 16)));
+        assert_eq!(classes.alloc(2, &mut backing), Some(Alloc(16, 20)));
 
         classes.dealloc(Alloc(0, 4), &mut backing);
         FreeLists::<[_], u32>::clear(&mut classes, &mut backing);
@@ -177,11 +231,11 @@ mod test {
         let classes = Exp2Size::<N, B>;
         assert_eq!(classes.size_class_contained(0), 0);
         assert_eq!(classes.size_class_containing(0), 0);
-        assert_eq!(classes.round_up_capacity(0), 1usize << B);
+        assert_eq!(classes.round_up_capacity(0), 0);
         assert_eq!(classes.round_down_capacity(0), 0);
         let mut cap = 1usize << B;
         let mul = 1usize << N;
-        for i in 0.. {
+        for i in 1.. {
             assert_eq!(classes.capacity(i), cap);
             assert_eq!(classes.size_class_exact(cap), i);
             assert_eq!(classes.size_class_contained(cap), i);
