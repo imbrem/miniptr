@@ -11,3 +11,7 @@ pub struct SlicePool<T, F> {
     /// The free lists of this slice pool
     free: F,
 }
+
+impl<T, F> SlicePool<T, F> {
+
+}

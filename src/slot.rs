@@ -556,6 +556,124 @@ where
     }
 }
 
+macro_rules! int_slot {
+    ($t:ty $(, $ts:ty)*) => {
+        impl InitFrom<$t> for $t {
+            #[cfg_attr(not(tarpaulin), inline(always))]
+            fn from_value(value: $t) -> Self
+            where
+                Self: Sized,
+            {
+                value
+            }
+
+            #[cfg_attr(not(tarpaulin), inline(always))]
+            fn set_value(&mut self, new: $t) {
+                *self = new
+            }
+        }
+
+        impl Slot for $t {
+            type Value = $t;
+
+            #[cfg_attr(not(tarpaulin), inline(always))]
+            fn try_into_value(self) -> Option<Self::Value> {
+                Some(self)
+            }
+
+            #[cfg_attr(not(tarpaulin), inline(always))]
+            fn into_value(self) -> Self::Value {
+                self
+            }
+        }
+
+        impl RemoveSlot for $t {
+            #[cfg_attr(not(tarpaulin), inline(always))]
+            fn try_remove_value(&mut self) -> Option<Self::Value> {
+                Some(*self)
+            }
+
+            #[cfg_attr(not(tarpaulin), inline(always))]
+            fn remove_value(&mut self) -> Self::Value {
+                *self
+            }
+
+            #[cfg_attr(not(tarpaulin), inline(always))]
+            fn delete_value(&mut self) {}
+        }
+
+        impl KeySlot<$t> for $t {
+            #[cfg_attr(not(tarpaulin), inline(always))]
+            fn try_key(&self) -> Option<$t> {
+                Some(*self)
+            }
+
+            #[cfg_attr(not(tarpaulin), inline(always))]
+            fn from_key(key: $t) -> Self {
+                key
+            }
+
+            #[cfg_attr(not(tarpaulin), inline(always))]
+            fn key(&self) -> $t {
+                *self
+            }
+
+            #[cfg_attr(not(tarpaulin), inline(always))]
+            fn set_key(&mut self, new: $t) {
+                *self = new
+            }
+
+            #[cfg_attr(not(tarpaulin), inline(always))]
+            fn swap_key(&mut self, mut new: $t) -> Self::Value {
+                std::mem::swap(self, &mut new);
+                new
+            }
+        }
+
+        $(
+            impl KeySlot<$ts> for $t {
+                #[cfg_attr(not(tarpaulin), inline(always))]
+                fn try_key(&self) -> Option<$ts> {
+                    let res = *self as $ts;
+                    if res as $t == *self {
+                        Some(res)
+                    } else {
+                        None
+                    }
+                }
+
+                #[cfg_attr(not(tarpaulin), inline(always))]
+                fn from_key(key: $ts) -> Self {
+                    key as $t
+                }
+
+                #[cfg_attr(not(tarpaulin), inline(always))]
+                fn key(&self) -> $ts {
+                    *self as $ts
+                }
+
+                #[cfg_attr(not(tarpaulin), inline(always))]
+                fn set_key(&mut self, new: $ts) {
+                    *self = new as $t
+                }
+            }
+        )*
+    };
+}
+
+int_slot!(u8, i8);
+int_slot!(u16, u8, i16, i8);
+int_slot!(u32, u16, u8, i32, i16, i8);
+int_slot!(u64, u32, u16, u8, i64, i32, i16, i8);
+int_slot!(u128, u64, u32, u16, u8, i128, i64, i32, i16, i8);
+int_slot!(usize, u16, u8, isize, i16, i8);
+int_slot!(i8, u8);
+int_slot!(i16, i8, u16, u8);
+int_slot!(i32, i16, i8, u32, u16, u8);
+int_slot!(i64, i32, i16, i8, u64, u32, u16, u8);
+int_slot!(i128, i64, i32, i16, i8, u128, u64, u32, u16, u8);
+int_slot!(isize, i16, i8, usize, u16, u8);
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -646,6 +764,33 @@ mod test {
         assert_eq!(slot, CloneSlot(7));
         slot.delete_value();
         assert_eq!(slot, CloneSlot(7));
+    }
+
+    #[test]
+    fn int_slot() {
+        assert_eq!(5i32.try_key(), Some(5));
+        assert_eq!(KeySlot::<i32>::key(&5i32), 5);
+        assert_eq!(5i32.try_key(), Some(5u32));
+        assert_eq!(KeySlot::<u32>::key(&5i32), 5);
+        let mut key = 5i32;
+        key.set_key(3u32);
+        assert_eq!(key, 3);
+        assert_eq!(key.swap_key(-3), 3);
+        assert_eq!(KeySlot::<u32>::key(&key), -3i32 as u32);
+        assert_eq!(KeySlot::<u8>::key(&1000), 1000i32 as u8);
+        assert_eq!(KeySlot::<u8>::try_key(&1000), None);
+        key.set_key(-9);
+        assert_eq!(key, -9);
+        assert_eq!(key.try_remove_value(), Some(-9));
+        assert_eq!(key.remove_value(), -9);
+        key.delete_value();
+        assert_eq!(key, -9);
+        assert_eq!(key, i32::from_key(-9i8));
+        assert_eq!(key, i32::from_key(-9i32));
+        assert_eq!(key, i32::from_value(-9i32));
+        key.set_value(-83);
+        assert_eq!(key.try_into_value(), Some(-83));
+        assert_eq!(key.into_value(), -83);
     }
 
     #[derive(PartialEq, Copy, Clone)]
