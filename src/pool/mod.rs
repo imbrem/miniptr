@@ -12,6 +12,8 @@ pub mod container;
 pub mod slab;
 pub mod slice;
 
+//TODO: add trait for sized objects?
+
 /// A pool which supports inserting values of type `V` for keys of type `K`
 pub trait Insert<K, V> {
     /// Insert `val` into the pool, assigning a new key which is returned
@@ -52,12 +54,21 @@ pub trait Pool<K> {
 // A pool mapping keys of type `K` to values of type `V`
 pub trait ObjectPool<K>: Pool<K> {
     /// The value type stored by this pool
-    type Object;
+    type Object: ?Sized;
 }
 
 /// A pool supporting insertion of objects, yielding keys
-pub trait InsertPool<K>: ObjectPool<K> + Insert<K, Self::Object> {}
-impl<K, P> InsertPool<K> for P where P: ObjectPool<K> + Insert<K, Self::Object> {}
+pub trait InsertPool<K>: ObjectPool<K> + Insert<K, Self::Object>
+where
+    Self::Object: Sized,
+{
+}
+impl<K, P> InsertPool<K> for P
+where
+    P: ObjectPool<K> + Insert<K, Self::Object>,
+    Self::Object: Sized,
+{
+}
 
 /// A [`Pool`] for which `Pool::delete` may be called multiple times on the same key without modifying any other key; panicking is allowed.
 ///
@@ -98,7 +109,10 @@ pub trait Take<K, V> {
 }
 
 /// A [`Pool`] supporting the removal of keys
-pub trait RemovePool<K>: ObjectPool<K> + Take<K, Self::Object> {
+pub trait RemovePool<K>: ObjectPool<K> + Take<K, Self::Object>
+where
+    Self::Object: Sized,
+{
     /// Deletes the key `k` from the mapping, returning its value.
     ///
     /// Guaranteed to have the same behaviour as [`Take<K, Self::Value`]'s `try_take` method,
@@ -131,7 +145,12 @@ pub trait RemovePool<K>: ObjectPool<K> + Take<K, Self::Object> {
     }
 }
 
-impl<P, K> RemovePool<K> for P where P: ObjectPool<K> + Take<K, Self::Object> {}
+impl<P, K> RemovePool<K> for P
+where
+    P: ObjectPool<K> + Take<K, Self::Object>,
+    Self::Object: Sized,
+{
+}
 
 /// A pool providing read-only access to values of type `V` given a key of type `K`
 pub trait GetRef<K, V: ?Sized> {

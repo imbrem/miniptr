@@ -3,26 +3,26 @@ A free list implementation for a slice allocator
 */
 use crate::{index::ContiguousIx, slot::KeySlot};
 
-/// A set of free lists for a given capacity
-pub trait FreeLists<B: ?Sized, K> {
+/// A free list of slices indexed by capacity
+pub trait FreeSlices<B: ?Sized, K> {
     /// Allocate a slice in the backing, returning it's index
     ///
     /// Returns `None` on failure
     #[must_use]
-    fn alloc(&mut self, capacity: usize, backing: &mut B) -> Option<Alloc<K>>;
+    fn alloc(&mut self, capacity: usize, backing: &mut B) -> Option<Slice<K>>;
 
     /// Deallocate a slice in the backing, putting it on the free list, potentially with a different capacity
     ///
     /// If the slot has not been previously alloc'ed or placed into the backing as a valid key, the behaviour is unspecified.
-    fn dealloc(&mut self, alloc: Alloc<K>, backing: &mut B);
+    fn dealloc(&mut self, alloc: Slice<K>, backing: &mut B);
 
     /// Clear this free list, resetting it
     fn clear(&mut self, backing: &mut B);
 }
 
-/// A slice allocation
+/// A slice composed of indices
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
-pub struct Alloc<K>(pub K, pub K);
+pub struct Slice<K>(pub K, pub K);
 
 /// An intrusive list for each size class
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Default)]
@@ -36,7 +36,7 @@ where
     S: SizeClasses,
 {
     #[inline]
-    pub fn alloc_size_class<K, T>(&mut self, size_class: u32, backing: &mut [T]) -> Option<Alloc<K>>
+    pub fn alloc_size_class<K, T>(&mut self, size_class: u32, backing: &mut [T]) -> Option<Slice<K>>
     where
         K: ContiguousIx,
         T: KeySlot<K>,
@@ -53,7 +53,7 @@ where
                 let upper_class = self.size_classes.split_size_class(size_class)?;
                 let size_class_alloc = self.alloc_size_class(upper_class, backing)?;
                 let begin = size_class_alloc.0.index();
-                let slack = Alloc(K::new_unchecked(begin + capacity), size_class_alloc.1);
+                let slack = Slice(K::new_unchecked(begin + capacity), size_class_alloc.1);
                 self.dealloc(slack, backing);
                 (self.free_heads[size_class as usize - 1], begin)
             };
@@ -66,7 +66,7 @@ where
         } else {
             self.free_heads[size_class as usize - 1] = next_index
         };
-        let result = Some(Alloc(
+        let result = Some(Slice(
             K::new_unchecked(free_head),
             K::new_unchecked(free_head + capacity),
         ));
@@ -74,20 +74,20 @@ where
     }
 }
 
-impl<K, S, T> FreeLists<[T], K> for IntrusiveClasses<S>
+impl<K, S, T> FreeSlices<[T], K> for IntrusiveClasses<S>
 where
     K: ContiguousIx,
     S: SizeClasses,
     T: KeySlot<K>,
 {
     #[inline]
-    fn alloc(&mut self, capacity: usize, backing: &mut [T]) -> Option<Alloc<K>> {
+    fn alloc(&mut self, capacity: usize, backing: &mut [T]) -> Option<Slice<K>> {
         let size_class = self.size_classes.size_class_containing(capacity);
         self.alloc_size_class(size_class, backing)
     }
 
     #[inline]
-    fn dealloc(&mut self, alloc: Alloc<K>, backing: &mut [T]) {
+    fn dealloc(&mut self, alloc: Slice<K>, backing: &mut [T]) {
         let begin = alloc.0.index();
         let end = alloc.1.index();
         let size_class = self.size_classes.size_class_contained(end - begin);
@@ -103,7 +103,7 @@ where
         backing[new_free_head].set_key(K::try_new(old_free_head).unwrap_or(alloc.0));
         self.free_heads[size_class as usize - 1] = new_free_head;
         let begin_slack = begin + self.size_classes.capacity(size_class);
-        let slack = Alloc(K::new_unchecked(begin_slack), alloc.1);
+        let slack = Slice(K::new_unchecked(begin_slack), alloc.1);
         self.dealloc(slack, backing)
     }
 
@@ -204,27 +204,27 @@ mod test {
     fn free_list_alloc() {
         let mut classes = IntrusiveClasses::<Exp2Size<1, 2>>::default();
         let mut backing = [0; 1024];
-        assert_eq!(classes.alloc(0, &mut backing), None::<Alloc<u32>>);
-        assert_eq!(classes.alloc(4, &mut backing), None::<Alloc<u32>>);
-        classes.dealloc(Alloc(0, 4), &mut backing);
-        assert_eq!(classes.alloc(8, &mut backing), None::<Alloc<u32>>);
-        assert_eq!(classes.alloc(2, &mut backing), Some(Alloc(0, 4)));
-        assert_eq!(classes.alloc(4, &mut backing), None::<Alloc<u32>>);
-        classes.dealloc(Alloc(0, 7), &mut backing); //Note: memory in 4..7 is leaked, since it can't fit into the smallest size class
-        classes.dealloc(Alloc(8, 12), &mut backing);
-        classes.dealloc(Alloc(12, 24), &mut backing); //Note: memory in 20..24 is *not* leaked, since it fits in a smaller size class
-        assert_eq!(classes.alloc(2, &mut backing), Some(Alloc(20, 24)));
-        assert_eq!(classes.alloc(2, &mut backing), Some(Alloc(8, 12)));
-        assert_eq!(classes.alloc(3, &mut backing), Some(Alloc(0, 4)));
-        assert_eq!(classes.alloc(8, &mut backing), Some(Alloc(12, 20)));
-        assert_eq!(classes.alloc(3, &mut backing), None::<Alloc<u32>>);
-        classes.dealloc(Alloc(12, 20), &mut backing);
-        assert_eq!(classes.alloc(3, &mut backing), Some(Alloc(12, 16)));
-        assert_eq!(classes.alloc(2, &mut backing), Some(Alloc(16, 20)));
+        assert_eq!(classes.alloc(0, &mut backing), None::<Slice<u32>>);
+        assert_eq!(classes.alloc(4, &mut backing), None::<Slice<u32>>);
+        classes.dealloc(Slice(0, 4), &mut backing);
+        assert_eq!(classes.alloc(8, &mut backing), None::<Slice<u32>>);
+        assert_eq!(classes.alloc(2, &mut backing), Some(Slice(0, 4)));
+        assert_eq!(classes.alloc(4, &mut backing), None::<Slice<u32>>);
+        classes.dealloc(Slice(0, 7), &mut backing); //Note: memory in 4..7 is leaked, since it can't fit into the smallest size class
+        classes.dealloc(Slice(8, 12), &mut backing);
+        classes.dealloc(Slice(12, 24), &mut backing); //Note: memory in 20..24 is *not* leaked, since it fits in a smaller size class
+        assert_eq!(classes.alloc(2, &mut backing), Some(Slice(20, 24)));
+        assert_eq!(classes.alloc(2, &mut backing), Some(Slice(8, 12)));
+        assert_eq!(classes.alloc(3, &mut backing), Some(Slice(0, 4)));
+        assert_eq!(classes.alloc(8, &mut backing), Some(Slice(12, 20)));
+        assert_eq!(classes.alloc(3, &mut backing), None::<Slice<u32>>);
+        classes.dealloc(Slice(12, 20), &mut backing);
+        assert_eq!(classes.alloc(3, &mut backing), Some(Slice(12, 16)));
+        assert_eq!(classes.alloc(2, &mut backing), Some(Slice(16, 20)));
 
-        classes.dealloc(Alloc(0, 4), &mut backing);
-        FreeLists::<[_], u32>::clear(&mut classes, &mut backing);
-        assert_eq!(classes.alloc(4, &mut backing), None::<Alloc<u32>>);
+        classes.dealloc(Slice(0, 4), &mut backing);
+        FreeSlices::<[_], u32>::clear(&mut classes, &mut backing);
+        assert_eq!(classes.alloc(4, &mut backing), None::<Slice<u32>>);
     }
 
     fn check_exp2_size_classes<const N: usize, const B: usize>() {
